@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict qb8QHOvEuI0XPmhrz2fw91JBWegmXYthcZw4ZvNt2JmnCQNRIKaJK709RD7dUVY
+
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.6
@@ -1507,5 +1507,4 @@ ALTER TABLE ONLY midmap.name_mappings
 -- PostgreSQL database dump complete
 --
 
-\unrestrict qb8QHOvEuI0XPmhrz2fw91JBWegmXYthcZw4ZvNt2JmnCQNRIKaJK709RD7dUVY
 
