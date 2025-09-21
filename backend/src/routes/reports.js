@@ -5,7 +5,8 @@ const clean = (s) => (s ?? "").toString().trim();
 
 function buildFilters(q) {
     const p = [];
-    const where = [];
+    // Always exclude global actions from reports
+    const where = ["cl.action NOT IN ('global_alias','global_name')"];
 
     if (q.branch) {
         p.push((q.branch ?? "").toString().trim());
@@ -25,10 +26,11 @@ function buildFilters(q) {
     }
 
     return {
-        sql: where.length ? "WHERE " + where.join(" AND ") : "",
+        sql: "WHERE " + where.join(" AND "),
         params: p,
     };
 }
+
 
 // --- meta (filters) ---------------------------------------------------------
 router.get("/meta", async (req, res) => {
