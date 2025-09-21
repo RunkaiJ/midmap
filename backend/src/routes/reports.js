@@ -5,7 +5,8 @@ const clean = (s) => (s ?? "").toString().trim();
 
 function buildFilters(q) {
     const p = [];
-    const where = [];
+    // Always exclude global actions from reports
+    const where = ["cl.action NOT IN ('global_alias','global_name')"];
 
     if (q.branch) {
         p.push((q.branch ?? "").toString().trim());
@@ -25,7 +26,7 @@ function buildFilters(q) {
     }
 
     return {
-        sql: where.length ? "WHERE " + where.join(" AND ") : "",
+        sql: "WHERE " + where.join(" AND "),
         params: p,
     };
 }
@@ -122,11 +123,14 @@ router.get("/grouped", async (req, res) => {
         from (select 1 from shipments) t;
     `;
         const dataSql = `
-      ${cte}
-      select * from shipments
-       order by arrival_date desc, shipment
-       limit $${params.length + 1} offset $${params.length + 2};
-    `;
+        ${cte}
+        select
+            to_char(arrival_date, 'YYYY-MM-DD') as arrival_date,
+            shipment, client, branch, changes_count, pairs
+        from shipments
+        order by arrival_date desc, shipment
+        limit $${params.length + 1} offset $${params.length + 2};
+        `;
         const [tot, data] = await Promise.all([
             db.query(totalSql, params).then((r) => r.rows[0].total),
             db.query(dataSql, [...params, limit, offset]).then((r) => r.rows),
@@ -137,9 +141,12 @@ router.get("/grouped", async (req, res) => {
     // Human-readable CSV
     const exportSql = `
     ${cte}
-    select * from shipments
-     order by arrival_date desc, shipment;
-  `;
+    select
+        to_char(arrival_date, 'YYYY-MM-DD') as arrival_date,
+        shipment, client, branch, changes_count, pairs
+    from shipments
+    order by arrival_date desc, shipment;
+    `;
     const rows = await db.query(exportSql, params).then((r) => r.rows);
 
     const header = [
