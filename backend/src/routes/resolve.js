@@ -4,7 +4,7 @@ const router = express.Router();
 const clean = (s) => (s ?? "").toString().trim();
 const up = (s) => clean(s).toUpperCase();
 
-router.post("/mids", express.json(), async (req, res) => {
+router.post("/mids", async (req, res) => {
     const db = req.app.get("pg");
     const items = Array.isArray(req.body.items) ? req.body.items : [];
     if (!items.length)
