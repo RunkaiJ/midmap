@@ -37,14 +37,6 @@ router.get("/meta", async (req, res) => {
     res.json({ branches });
 });
 
-const mapAction = (method) => {
-    // method comes from the resolver: 'alias' | 'name'
-    if (method === "alias") return "auto_alias";
-    if (method === "name") return "auto_name";
-    // should not happen because we only log when a change occurred,
-    // but return a safe default that's still valid for the enum:
-    return "auto_name";
-};
 /* -------- log changes -------- */
 router.post("/changes", express.json(), async (req, res) => {
     const db = req.app.get("pg");
@@ -68,7 +60,7 @@ router.post("/changes", express.json(), async (req, res) => {
             manufacturer_name: clean(r.manufacturer_name) || null,
             bad_mid: up(r.bad_mid),
             good_mid: up(r.good_mid),
-            action: clean(r.method) || "auto", // 'alias' | 'name' | 'auto'
+            action: clean(r.method)
         }))
         .filter(
             (r) => r.airline_3d && r.master_bill_no && r.bad_mid && r.good_mid

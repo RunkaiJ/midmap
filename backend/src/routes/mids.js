@@ -1,225 +1,197 @@
+
 const express = require("express");
 const router = express.Router();
 
 const clean = (s) => (s ?? "").toString().trim();
 const up = (s) => clean(s).toUpperCase();
 
-/** ensure canonical row exists and return id */
-async function upsertCanonical(db, good_mid, manufacturer_name) {
-    const q = await db.query(
-        `insert into midmap.canonical_manufacturers (good_mid, manufacturer_name)
-     values ($1,$2)
-     on conflict (good_mid) do update set
-       manufacturer_name = coalesce(excluded.manufacturer_name, midmap.canonical_manufacturers.manufacturer_name)
-     returning id`,
-        [up(good_mid), clean(manufacturer_name) || null]
-    );
-    return q.rows[0].id;
-}
+/** bulk insert helper (global actions only) */
+async function insertGlobal(db, action, branch, person, rows) {
+    if (!rows.length) return { inserted: 0, total: 0 };
 
-async function logGlobal(
-    client,
-    {
-        action, // 'global_alias' | 'global_name'
-        actorBranch, // e.g. 'LAX'
-        changedBy, // e.g. 'Jane Doe'
-        badMid = null,
-        manufacturerName = null,
-        goodMid,
-    }
-) {
-    await client.query(
-        `
-    INSERT INTO midmap.change_log (
-      changed_at, action, changed_by, actor_branch,
-      airline_3d, master_bill_no, importer_id, arrival_airport, arrival_date,
-      manufacturer_name, bad_mid, good_mid, client_name
-    )
-    VALUES (now(), $1, $2, $3,
-            NULL, NULL, NULL, NULL, NULL,
-            $4, $5, $6, NULL)
-  `,
-        [
+    // We always insert into the same set of columns; for rows that don't need
+    // manufacturer_name or bad_mid, we pass nulls.
+    const cols = `(changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)`;
+
+    const values = [];
+    const params = [];
+    const per = 7;
+    rows.forEach((r, i) => {
+        const o = i * per;
+        values.push(
+            `(NOW(), $${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5}, $${
+                o + 6
+            })`
+        );
+        params.push(
             action,
-            changedBy || null,
-            actorBranch || null,
-            clean(manufacturerName) || null,
-            up(badMid) || null,
-            up(goodMid),
-        ]
-    );
+            person || null,
+            branch,
+            r.bad_mid ?? null,
+            r.good_mid ?? null,
+            r.manufacturer_name ?? null
+        );
+    });
+
+    const sql = `
+    INSERT INTO midmap.change_log ${cols}
+    VALUES ${values.join(",")}
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `;
+
+    const res = await db.query(sql, params);
+    return { inserted: res.rowCount, total: rows.length };
 }
 
-/** POST /api/mids/triplets/bulk  { created_by, rows:[{bad_mid,manufacturer_name,good_mid}] } */
+/** de-dupe helpers (within the incoming payload) */
+function dedupeAliases(rows) {
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+        const bad_mid = up(r.bad_mid);
+        const good_mid = up(r.good_mid);
+        const k = `${bad_mid}|${good_mid}`;
+        if (bad_mid && good_mid && !seen.has(k)) {
+            seen.add(k);
+            out.push({ bad_mid, good_mid });
+        }
+    }
+    return out;
+}
+function dedupeNames(rows) {
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+        const manufacturer_name = clean(r.manufacturer_name);
+        const good_mid = up(r.good_mid);
+        const k = `${manufacturer_name}|${good_mid}`;
+        if (manufacturer_name && good_mid && !seen.has(k)) {
+            seen.add(k);
+            out.push({ manufacturer_name, good_mid });
+        }
+    }
+    return out;
+}
+
+/** ----------------- Routes ----------------- */
+/** Triplets: [{ bad_mid, manufacturer_name, good_mid }] -> write two global logs */
 router.post("/triplets/bulk", express.json(), async (req, res) => {
     const db = req.app.get("pg");
+    const branch = clean(req.body.actor_branch);
+    const person = clean(req.body.changed_by);
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-    const who = clean(req.body.changed_by || req.body.created_by) || null;
-    const br = clean(req.body.actor_branch || req.body.branch) || null;
 
-    if (!rows.length)
-        return res.status(400).json({ ok: false, error: "rows[] required" });
+    if (!branch)
+        return res
+            .status(400)
+            .json({ ok: false, error: "actor_branch required" });
+    if (!person)
+        return res
+            .status(400)
+            .json({ ok: false, error: "changed_by required" });
 
-    const client = await db.connect();
-    let inserted = 0;
+    // Split into alias + name sets and de-dupe each
+    const aliasRows = dedupeAliases(rows);
+    const nameRows = dedupeNames(rows);
+
     try {
-        await client.query("BEGIN");
-        for (const r of rows) {
-            const bad = up(r.bad_mid);
-            const good = up(r.good_mid);
-            const name = clean(r.manufacturer_name);
-            if (!bad || !good || !name) continue;
+        await db.query("BEGIN");
+        const a = await insertGlobal(
+            db,
+            "global_alias",
+            branch,
+            person,
+            aliasRows
+        );
+        const n = await insertGlobal(
+            db,
+            "global_name",
+            branch,
+            person,
+            nameRows
+        );
+        await db.query("COMMIT");
 
-            const cid = await upsertCanonical(client, good, name);
-
-            await client.query(
-                `
-        INSERT INTO midmap.mid_aliases (bad_mid, good_manufacturer_id, created_by)
-        VALUES ($1,$2,$3)
-        ON CONFLICT (bad_mid) DO UPDATE
-          SET good_manufacturer_id = EXCLUDED.good_manufacturer_id
-      `,
-                [bad, cid, who]
-            );
-
-            await client.query(
-                `
-        INSERT INTO midmap.name_mappings (manufacturer_name, good_manufacturer_id, created_by)
-        VALUES ($1,$2,$3)
-        ON CONFLICT (manufacturer_name) DO UPDATE
-          SET good_manufacturer_id = EXCLUDED.good_manufacturer_id
-      `,
-                [name, cid, who]
-            );
-
-            // log both sides of the triplet as global actions
-            await logGlobal(client, {
-                action: "global_alias",
-                actorBranch: br,
-                changedBy: who,
-                badMid: bad,
-                goodMid: good,
-            });
-            await logGlobal(client, {
-                action: "global_name",
-                actorBranch: br,
-                changedBy: who,
-                manufacturerName: name,
-                goodMid: good,
-            });
-
-            inserted++;
-        }
-        await client.query("COMMIT");
-        res.json({ ok: true, inserted });
+        const inserted = a.inserted + n.inserted;
+        const total = a.total + n.total;
+        return res.json({
+            ok: true,
+            inserted,
+            skipped: total - inserted,
+            inserted_alias: a.inserted,
+            inserted_name: n.inserted,
+        });
     } catch (e) {
-        await client.query("ROLLBACK");
-        console.error(e);
-        res.status(500).json({ ok: false, error: e.message });
-    } finally {
-        client.release();
+        await db.query("ROLLBACK");
+        console.error("mids/triplets/bulk failed:", e);
+        return res
+            .status(500)
+            .json({ ok: false, error: e.message || "insert failed" });
     }
 });
 
-/** POST /api/mids/aliases/bulk  { created_by, rows:[{bad_mid,good_mid}] } */
+/** Aliases: [{ bad_mid, good_mid }] */
 router.post("/aliases/bulk", express.json(), async (req, res) => {
     const db = req.app.get("pg");
-    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-    const who = clean(req.body.changed_by || req.body.created_by) || null;
-    const br = clean(req.body.actor_branch || req.body.branch) || null;
+    const branch = clean(req.body.actor_branch);
+    const person = clean(req.body.changed_by);
+    const rows = dedupeAliases(
+        Array.isArray(req.body.rows) ? req.body.rows : []
+    );
 
-    if (!rows.length)
-        return res.status(400).json({ ok: false, error: "rows[] required" });
+    if (!branch)
+        return res
+            .status(400)
+            .json({ ok: false, error: "actor_branch required" });
+    if (!person)
+        return res
+            .status(400)
+            .json({ ok: false, error: "changed_by required" });
 
-    const client = await db.connect();
-    let inserted = 0;
     try {
-        await client.query("BEGIN");
-        for (const r of rows) {
-            const bad = up(r.bad_mid);
-            const good = up(r.good_mid);
-            if (!bad || !good) continue;
-
-            const cid = await upsertCanonical(client, good, null);
-            await client.query(
-                `
-        INSERT INTO midmap.mid_aliases (bad_mid, good_manufacturer_id, created_by)
-        VALUES ($1,$2,$3)
-        ON CONFLICT (bad_mid) DO UPDATE
-          SET good_manufacturer_id = EXCLUDED.good_manufacturer_id
-      `,
-                [bad, cid, who]
-            );
-
-            await logGlobal(client, {
-                action: "global_alias",
-                actorBranch: br,
-                changedBy: who,
-                badMid: bad,
-                goodMid: good,
-            });
-
-            inserted++;
-        }
-        await client.query("COMMIT");
-        res.json({ ok: true, inserted });
+        const r = await insertGlobal(db, "global_alias", branch, person, rows);
+        return res.json({
+            ok: true,
+            inserted: r.inserted,
+            skipped: r.total - r.inserted,
+        });
     } catch (e) {
-        await client.query("ROLLBACK");
-        console.error(e);
-        res.status(500).json({ ok: false, error: e.message });
-    } finally {
-        client.release();
+        console.error("mids/aliases/bulk failed:", e);
+        return res
+            .status(500)
+            .json({ ok: false, error: e.message || "insert failed" });
     }
 });
 
-/** POST /api/mids/names/bulk  { created_by, rows:[{manufacturer_name,good_mid}] } */
+/** Names: [{ manufacturer_name, good_mid }] */
 router.post("/names/bulk", express.json(), async (req, res) => {
     const db = req.app.get("pg");
-    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-    const who = clean(req.body.changed_by || req.body.created_by) || null;
-    const br = clean(req.body.actor_branch || req.body.branch) || null;
+    const branch = clean(req.body.actor_branch);
+    const person = clean(req.body.changed_by);
+    const rows = dedupeNames(Array.isArray(req.body.rows) ? req.body.rows : []);
 
-    if (!rows.length)
-        return res.status(400).json({ ok: false, error: "rows[] required" });
+    if (!branch)
+        return res
+            .status(400)
+            .json({ ok: false, error: "actor_branch required" });
+    if (!person)
+        return res
+            .status(400)
+            .json({ ok: false, error: "changed_by required" });
 
-    const client = await db.connect();
-    let inserted = 0;
     try {
-        await client.query("BEGIN");
-        for (const r of rows) {
-            const name = clean(r.manufacturer_name);
-            const good = up(r.good_mid);
-            if (!name || !good) continue;
-
-            const cid = await upsertCanonical(client, good, name);
-            await client.query(
-                `
-        INSERT INTO midmap.name_mappings (manufacturer_name, good_manufacturer_id, created_by)
-        VALUES ($1,$2,$3)
-        ON CONFLICT (manufacturer_name) DO UPDATE
-          SET good_manufacturer_id = EXCLUDED.good_manufacturer_id
-      `,
-                [name, cid, who]
-            );
-
-            await logGlobal(client, {
-                action: "global_name",
-                actorBranch: br,
-                changedBy: who,
-                manufacturerName: name,
-                goodMid: good,
-            });
-
-            inserted++;
-        }
-        await client.query("COMMIT");
-        res.json({ ok: true, inserted });
+        const r = await insertGlobal(db, "global_name", branch, person, rows);
+        return res.json({
+            ok: true,
+            inserted: r.inserted,
+            skipped: r.total - r.inserted,
+        });
     } catch (e) {
-        await client.query("ROLLBACK");
-        console.error(e);
-        res.status(500).json({ ok: false, error: e.message });
-    } finally {
-        client.release();
+        console.error("mids/names/bulk failed:", e);
+        return res
+            .status(500)
+            .json({ ok: false, error: e.message || "insert failed" });
     }
 });
 
