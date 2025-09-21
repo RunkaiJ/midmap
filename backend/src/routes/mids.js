@@ -1,4 +1,3 @@
-
 const express = require("express");
 const router = express.Router();
 
@@ -9,13 +8,11 @@ const up = (s) => clean(s).toUpperCase();
 async function insertGlobal(db, action, branch, person, rows) {
     if (!rows.length) return { inserted: 0, total: 0 };
 
-    // We always insert into the same set of columns; for rows that don't need
-    // manufacturer_name or bad_mid, we pass nulls.
     const cols = `(changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)`;
 
     const values = [];
     const params = [];
-    const per = 7;
+    const per = 6; // <-- was 7; we have 6 $-params per row (changed_at is NOW())
     rows.forEach((r, i) => {
         const o = i * per;
         values.push(
