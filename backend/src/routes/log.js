@@ -38,7 +38,7 @@ router.get("/meta", async (req, res) => {
 });
 
 /* -------- log changes -------- */
-router.post("/changes", express.json(), async (req, res) => {
+router.post("/changes", async (req, res) => {
     const db = req.app.get("pg");
 
     const branch = clean(req.body.branch);

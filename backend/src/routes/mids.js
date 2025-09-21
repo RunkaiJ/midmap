@@ -73,7 +73,7 @@ function dedupeNames(rows) {
 
 /** ----------------- Routes ----------------- */
 /** Triplets: [{ bad_mid, manufacturer_name, good_mid }] -> write two global logs */
-router.post("/triplets/bulk", express.json(), async (req, res) => {
+router.post("/triplets/bulk", async (req, res) => {
     const db = req.app.get("pg");
     const branch = clean(req.body.actor_branch);
     const person = clean(req.body.changed_by);
@@ -129,7 +129,7 @@ router.post("/triplets/bulk", express.json(), async (req, res) => {
 });
 
 /** Aliases: [{ bad_mid, good_mid }] */
-router.post("/aliases/bulk", express.json(), async (req, res) => {
+router.post("/aliases/bulk", async (req, res) => {
     const db = req.app.get("pg");
     const branch = clean(req.body.actor_branch);
     const person = clean(req.body.changed_by);
@@ -162,7 +162,7 @@ router.post("/aliases/bulk", express.json(), async (req, res) => {
 });
 
 /** Names: [{ manufacturer_name, good_mid }] */
-router.post("/names/bulk", express.json(), async (req, res) => {
+router.post("/names/bulk", async (req, res) => {
     const db = req.app.get("pg");
     const branch = clean(req.body.actor_branch);
     const person = clean(req.body.changed_by);
