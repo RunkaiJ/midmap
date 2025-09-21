@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-const API = import.meta.env.VITE_API_BASE;
+// harden API base (strip trailing slash, require absolute URL)
+const RAW_API = (import.meta.env.VITE_API_BASE || "").trim();
+const API = RAW_API.replace(/\/+$/, "");
+if (!/^https?:\/\//.test(API)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+        "VITE_API_BASE should be an absolute URL (http/https). Got:",
+        RAW_API
+    );
+}
 
 /* ---------------- helpers ---------------- */
 const clean = (s) => (s ?? "").toString().trim();
@@ -138,8 +147,7 @@ export default function AddMids() {
     const [branch, setBranch] = useState("");
     const [person, setPerson] = useState("");
 
-    // single-mode input
-    // 'triplet' | 'alias' | 'name'
+    // single-mode input: 'triplet' | 'alias' | 'name'
     const [mode, setMode] = useState("triplet");
     const [bulkText, setBulkText] = useState("");
 
@@ -154,10 +162,11 @@ export default function AddMids() {
         (async () => {
             try {
                 const r = await fetch(`${API}/reports/meta`);
+                if (!r.ok) throw new Error(await r.text());
                 const j = await r.json();
                 if (cancelled) return;
                 const list = Array.isArray(j.branches) ? j.branches : [];
-                setBranches(list); 
+                setBranches(list);
             } catch (e) {
                 if (!cancelled) {
                     setStatus({
@@ -221,12 +230,8 @@ export default function AddMids() {
                     good_mid: up(r.good_mid),
                 });
             }
-            if (!seen.has(key)) {
-                seen.add(key);
-            } else {
-                // drop duplicate (by not pushing again)
-                out.pop();
-            }
+            if (!seen.has(key)) seen.add(key);
+            else out.pop(); // drop duplicate (by not pushing again)
         }
         return out;
     }
@@ -261,24 +266,29 @@ export default function AddMids() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
-            if (!res.ok) throw new Error(await res.text());
-            const data = await res.json();
 
-            setStatus({
-                type: "success",
-                text:
-                    mode === "triplet"
-                        ? `Saved ${data.inserted} triplet${
-                              data.inserted === 1 ? "" : "s"
-                          }.`
-                        : mode === "alias"
-                        ? `Saved ${data.inserted} alias${
-                              data.inserted === 1 ? "" : "es"
-                          }.`
-                        : `Saved ${data.inserted} name mapping${
-                              data.inserted === 1 ? "" : "s"
-                          }.`,
-            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data?.ok === false) {
+                throw new Error(data?.error || (await res.text()));
+            }
+
+            const inserted = Number(data?.inserted ?? 0);
+            const skipped = Number(data?.skipped ?? 0);
+            const msgMain =
+                mode === "triplet"
+                    ? `Saved ${inserted} triplet${inserted === 1 ? "" : "s"}.`
+                    : mode === "alias"
+                    ? `Saved ${inserted} alias${inserted === 1 ? "" : "es"}.`
+                    : `Saved ${inserted} name mapping${
+                          inserted === 1 ? "" : "s"
+                      }.`;
+            const msg = skipped
+                ? `${msgMain} (${skipped} duplicate${
+                      skipped === 1 ? "" : "s"
+                  } skipped)`
+                : msgMain;
+
+            setStatus({ type: "success", text: msg });
 
             setHistory((h) =>
                 [
