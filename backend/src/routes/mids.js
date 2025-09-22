@@ -4,6 +4,67 @@ const router = express.Router();
 const clean = (s) => (s ?? "").toString().trim();
 const up = (s) => clean(s).toUpperCase();
 
+async function applyToCanonical(db, aliasRows, nameRows, person) {
+    // 1) Upsert canonical from *names* (preferred name source)
+    if (nameRows.length) {
+        await db.query(
+            `
+      INSERT INTO midmap.canonical_manufacturers (good_mid, manufacturer_name, created_at)
+      SELECT x.good_mid, x.manufacturer_name, NOW()
+      FROM jsonb_to_recordset($1::jsonb) AS x(good_mid text, manufacturer_name text)
+      ON CONFLICT (good_mid) DO UPDATE
+        SET manufacturer_name = EXCLUDED.manufacturer_name
+        WHERE midmap.canonical_manufacturers.manufacturer_name IS DISTINCT FROM EXCLUDED.manufacturer_name
+    `,
+            [JSON.stringify(nameRows)]
+        );
+    }
+
+    // 2) Ensure canonical exists for alias-only good_mids (fallback name = good_mid)
+    if (aliasRows.length) {
+        await db.query(
+            `
+      INSERT INTO midmap.canonical_manufacturers (good_mid, manufacturer_name, created_at)
+      SELECT DISTINCT x.good_mid, x.good_mid, NOW()
+      FROM jsonb_to_recordset($1::jsonb) AS x(bad_mid text, good_mid text)
+      LEFT JOIN midmap.canonical_manufacturers c ON c.good_mid = x.good_mid
+      WHERE c.id IS NULL
+    `,
+            [JSON.stringify(aliasRows)]
+        );
+    }
+
+    // 3) name_mappings → canonical.id
+    if (nameRows.length) {
+        await db.query(
+            `
+      WITH cm AS (SELECT id, good_mid FROM midmap.canonical_manufacturers)
+      INSERT INTO midmap.name_mappings (manufacturer_name, good_manufacturer_id, created_by, created_at)
+      SELECT x.manufacturer_name, cm.id, $2, NOW()
+      FROM jsonb_to_recordset($1::jsonb) AS x(manufacturer_name text, good_mid text)
+      JOIN cm ON cm.good_mid = x.good_mid
+      ON CONFLICT DO NOTHING
+    `,
+            [JSON.stringify(nameRows), person || null]
+        );
+    }
+
+    // 4) mid_aliases → canonical.id
+    if (aliasRows.length) {
+        await db.query(
+            `
+      WITH cm AS (SELECT id, good_mid FROM midmap.canonical_manufacturers)
+      INSERT INTO midmap.mid_aliases (bad_mid, good_manufacturer_id, created_by, created_at)
+      SELECT x.bad_mid, cm.id, $2, NOW()
+      FROM jsonb_to_recordset($1::jsonb) AS x(bad_mid text, good_mid text)
+      JOIN cm ON cm.good_mid = x.good_mid
+      ON CONFLICT DO NOTHING
+    `,
+            [JSON.stringify(aliasRows), person || null]
+        );
+    }
+}
+
 /** bulk insert helper (global actions only) */
 async function insertGlobal(db, action, branch, person, rows) {
     if (!rows.length) return { inserted: 0, total: 0 };
@@ -94,8 +155,7 @@ router.post("/triplets/bulk", async (req, res) => {
 
     const aliasRows = dedupeAliases(rows);
     const nameRows = dedupeNames(rows);
-
-    if (aliasRows.length === 0 && nameRows.length === 0) {
+    if (!aliasRows.length && !nameRows.length) {
         return res.json({
             ok: true,
             inserted: 0,
@@ -107,6 +167,8 @@ router.post("/triplets/bulk", async (req, res) => {
 
     try {
         await db.query("BEGIN");
+
+        // 1) write audit log
         const a = await insertGlobal(
             db,
             "global_alias",
@@ -121,6 +183,10 @@ router.post("/triplets/bulk", async (req, res) => {
             person,
             nameRows
         );
+
+        // 2) materialize to normalized tables
+        await applyToCanonical(db, aliasRows, nameRows, person);
+
         await db.query("COMMIT");
 
         const inserted = a.inserted + n.inserted;
@@ -160,13 +226,17 @@ router.post("/aliases/bulk", async (req, res) => {
             .json({ ok: false, error: "changed_by required" });
 
     try {
+        await db.query("BEGIN");
         const r = await insertGlobal(db, "global_alias", branch, person, rows);
+        await applyToCanonical(db, rows, [], person);
+        await db.query("COMMIT");
         return res.json({
             ok: true,
             inserted: r.inserted,
             skipped: r.total - r.inserted,
         });
     } catch (e) {
+        await db.query("ROLLBACK");
         console.error("mids/aliases/bulk failed:", e);
         return res
             .status(500)
@@ -191,13 +261,17 @@ router.post("/names/bulk", async (req, res) => {
             .json({ ok: false, error: "changed_by required" });
 
     try {
+        await db.query("BEGIN");
         const r = await insertGlobal(db, "global_name", branch, person, rows);
+        await applyToCanonical(db, [], rows, person);
+        await db.query("COMMIT");
         return res.json({
             ok: true,
             inserted: r.inserted,
             skipped: r.total - r.inserted,
         });
     } catch (e) {
+        await db.query("ROLLBACK");
         console.error("mids/names/bulk failed:", e);
         return res
             .status(500)
