@@ -274,21 +274,51 @@ export default function AddMids() {
 
             const inserted = Number(data?.inserted ?? 0);
             const skipped = Number(data?.skipped ?? 0);
-            const msgMain =
-                mode === "triplet"
-                    ? `Saved ${inserted} triplet${inserted === 1 ? "" : "s"}.`
-                    : mode === "alias"
-                    ? `Saved ${inserted} alias${inserted === 1 ? "" : "es"}.`
-                    : `Saved ${inserted} name mapping${
-                          inserted === 1 ? "" : "s"
-                      }.`;
-            const msg = skipped
-                ? `${msgMain} (${skipped} duplicate${
-                      skipped === 1 ? "" : "s"
-                  } skipped)`
-                : msgMain;
 
-            setStatus({ type: "success", text: msg });
+            if (mode === "triplet") {
+                // backend (new mids.js) returns these; if not, we fall back to splitting totals
+                const ia =
+                    data?.inserted_alias != null
+                        ? Number(data.inserted_alias)
+                        : Math.floor(inserted / 2);
+                const iname =
+                    data?.inserted_name != null
+                        ? Number(data.inserted_name)
+                        : inserted - ia;
+
+                const msg =
+                    `Saved ${ia} alias and ${iname} name mapping${
+                        iname === 1 ? "" : "s"
+                    } from ${rows.length} triplet${
+                        rows.length === 1 ? "" : "s"
+                    }` +
+                    (skipped
+                        ? ` (${skipped} duplicate mapping${
+                              skipped === 1 ? "" : "s"
+                          } skipped)`
+                        : "");
+                setStatus({ type: "success", text: msg });
+            } else if (mode === "alias") {
+                const msg =
+                    `Saved ${inserted} alias${inserted === 1 ? "" : "es"}` +
+                    (skipped
+                        ? ` (${skipped} duplicate${
+                              skipped === 1 ? "" : "s"
+                          } skipped)`
+                        : "");
+                setStatus({ type: "success", text: msg });
+            } else {
+                const msg =
+                    `Saved ${inserted} name mapping${
+                        inserted === 1 ? "" : "s"
+                    }` +
+                    (skipped
+                        ? ` (${skipped} duplicate${
+                              skipped === 1 ? "" : "s"
+                          } skipped)`
+                        : "");
+                setStatus({ type: "success", text: msg });
+            }
 
             setHistory((h) =>
                 [

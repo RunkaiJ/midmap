@@ -8,37 +8,41 @@ const up = (s) => clean(s).toUpperCase();
 async function insertGlobal(db, action, branch, person, rows) {
     if (!rows.length) return { inserted: 0, total: 0 };
 
-    const cols = `(changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)`;
-
-    const values = [];
-    const params = [];
-    const per = 6; // <-- was 7; we have 6 $-params per row (changed_at is NOW())
-    rows.forEach((r, i) => {
-        const o = i * per;
-        values.push(
-            `(NOW(), $${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5}, $${
-                o + 6
-            })`
-        );
-        params.push(
-            action,
+    if (action === "global_alias") {
+        const sql = `
+      INSERT INTO midmap.change_log
+        (changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)
+      SELECT NOW(), 'global_alias', $1, $2, x.bad_mid, x.good_mid, NULL
+      FROM jsonb_to_recordset($3::jsonb) AS x(bad_mid text, good_mid text)
+      ON CONFLICT DO NOTHING
+      RETURNING id
+    `;
+        const r = await db.query(sql, [
             person || null,
             branch,
-            r.bad_mid ?? null,
-            r.good_mid ?? null,
-            r.manufacturer_name ?? null
-        );
-    });
+            JSON.stringify(rows),
+        ]);
+        return { inserted: r.rowCount, total: rows.length };
+    }
 
-    const sql = `
-    INSERT INTO midmap.change_log ${cols}
-    VALUES ${values.join(",")}
-    ON CONFLICT DO NOTHING
-    RETURNING id
-  `;
+    if (action === "global_name") {
+        const sql = `
+      INSERT INTO midmap.change_log
+        (changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)
+      SELECT NOW(), 'global_name', $1, $2, NULL, x.good_mid, x.manufacturer_name
+      FROM jsonb_to_recordset($3::jsonb) AS x(manufacturer_name text, good_mid text)
+      ON CONFLICT DO NOTHING
+      RETURNING id
+    `;
+        const r = await db.query(sql, [
+            person || null,
+            branch,
+            JSON.stringify(rows),
+        ]);
+        return { inserted: r.rowCount, total: rows.length };
+    }
 
-    const res = await db.query(sql, params);
-    return { inserted: res.rowCount, total: rows.length };
+    throw new Error(`Unknown action ${action}`);
 }
 
 /** de-dupe helpers (within the incoming payload) */
@@ -88,9 +92,18 @@ router.post("/triplets/bulk", async (req, res) => {
             .status(400)
             .json({ ok: false, error: "changed_by required" });
 
-    // Split into alias + name sets and de-dupe each
     const aliasRows = dedupeAliases(rows);
     const nameRows = dedupeNames(rows);
+
+    if (aliasRows.length === 0 && nameRows.length === 0) {
+        return res.json({
+            ok: true,
+            inserted: 0,
+            skipped: 0,
+            inserted_alias: 0,
+            inserted_name: 0,
+        });
+    }
 
     try {
         await db.query("BEGIN");
