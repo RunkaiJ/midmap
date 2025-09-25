@@ -156,7 +156,7 @@ router.get("/grouped", async (req, res) => {
         "branch",
         "changes",
         "people",
-        "pairs", // e.g. BAD → GOOD ×3 (by Jane); BAD2 → GOOD2 (by John)
+        "pairs", // e.g. BAD -> GOOD ×3; BAD2 -> GOOD2
     ].join(",");
 
     const lines = [header];
@@ -168,7 +168,7 @@ router.get("/grouped", async (req, res) => {
         const pairText = (r.pairs || [])
             .map((p) => {
                 const cnt = p.count > 1 ? ` ×${p.count}` : "";
-                return `${p.bad_mid} → ${p.good_mid}${cnt}`;
+                return `${p.bad_mid} -> ${p.good_mid}${cnt}`;
             })
             .join("; ");
 
