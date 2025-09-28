@@ -168,9 +168,13 @@ router.get("/grouped", async (req, res) => {
         const pairText = (r.pairs || [])
             .map((p) => {
                 const cnt = p.count > 1 ? ` ×${p.count}` : "";
-                return `${p.bad_mid} -> ${p.good_mid}${cnt}`;
+                const left = (p.manufacturer_name || "").trim();
+                return left
+                    ? `${left}: ${p.bad_mid} -> ${p.good_mid}${cnt}`
+                    : `${p.bad_mid} -> ${p.good_mid}${cnt}`;
             })
             .join("; ");
+
 
         lines.push(
             [
