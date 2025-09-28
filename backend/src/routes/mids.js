@@ -10,8 +10,10 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
         await db.query(
             `
       INSERT INTO midmap.canonical_manufacturers (good_mid, manufacturer_name, created_at)
-      SELECT x.good_mid, x.manufacturer_name, NOW()
+      SELECT x.good_mid, x.manufacturer_name, clock_timestamp()
       FROM jsonb_to_recordset($1::jsonb) AS x(good_mid text, manufacturer_name text)
+      WHERE btrim(x.manufacturer_name) <> ''
+        AND upper(btrim(x.manufacturer_name)) <> upper(btrim(x.good_mid))
       ON CONFLICT (good_mid) DO UPDATE
         SET manufacturer_name = EXCLUDED.manufacturer_name
         WHERE midmap.canonical_manufacturers.manufacturer_name IS DISTINCT FROM EXCLUDED.manufacturer_name
@@ -20,12 +22,12 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
         );
     }
 
-    // 2) Ensure canonical exists for alias-only good_mids (fallback name = good_mid)
+    // 2) Ensure canonical exists for alias-only good_mids (name stays NULL)
     if (aliasRows.length) {
         await db.query(
             `
-      INSERT INTO midmap.canonical_manufacturers (good_mid, manufacturer_name, created_at)
-      SELECT DISTINCT x.good_mid, x.good_mid, NOW()
+      INSERT INTO midmap.canonical_manufacturers (good_mid, created_at)
+      SELECT DISTINCT x.good_mid, clock_timestamp()
       FROM jsonb_to_recordset($1::jsonb) AS x(bad_mid text, good_mid text)
       LEFT JOIN midmap.canonical_manufacturers c ON c.good_mid = x.good_mid
       WHERE c.id IS NULL
@@ -34,14 +36,16 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
         );
     }
 
-    // 3) name_mappings → canonical.id
+    // 3) name_mappings → canonical.id (same filter as in step 1)
     if (nameRows.length) {
         await db.query(
             `
       WITH cm AS (SELECT id, good_mid FROM midmap.canonical_manufacturers)
       INSERT INTO midmap.name_mappings (manufacturer_name, good_manufacturer_id, created_by, created_at)
-      SELECT x.manufacturer_name, cm.id, $2, NOW()
+      SELECT x.manufacturer_name, cm.id, $2, clock_timestamp()
       FROM jsonb_to_recordset($1::jsonb) AS x(manufacturer_name text, good_mid text)
+      WHERE btrim(x.manufacturer_name) <> ''
+        AND upper(btrim(x.manufacturer_name)) <> upper(btrim(x.good_mid))
       JOIN cm ON cm.good_mid = x.good_mid
       ON CONFLICT DO NOTHING
     `,
@@ -55,7 +59,7 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
             `
       WITH cm AS (SELECT id, good_mid FROM midmap.canonical_manufacturers)
       INSERT INTO midmap.mid_aliases (bad_mid, good_manufacturer_id, created_by, created_at)
-      SELECT x.bad_mid, cm.id, $2, NOW()
+      SELECT x.bad_mid, cm.id, $2, clock_timestamp()
       FROM jsonb_to_recordset($1::jsonb) AS x(bad_mid text, good_mid text)
       JOIN cm ON cm.good_mid = x.good_mid
       ON CONFLICT DO NOTHING
@@ -64,6 +68,7 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
         );
     }
 }
+
 
 /** bulk insert helper (global actions only) */
 async function insertGlobal(db, action, branch, person, rows) {
