@@ -5,6 +5,23 @@ import { saveAs } from "file-saver";
 
 const API = import.meta.env.VITE_API_BASE;
 
+// Make chosen columns display as m/d/yyyy (for cells that already hold serials)
+function fmtDateCols(ws, ...colIdx) {
+    const rng = XLSX.utils.decode_range(ws["!ref"]);
+    for (const c of colIdx) {
+        for (let r = 1; r <= rng.e.r; r++) {
+            // start at row 1 (skip header at r=0)
+            const addr = XLSX.utils.encode_cell({ r, c });
+            const cell = ws[addr];
+            if (cell && typeof cell.v === "number") {
+                // serial -> just add a format
+                cell.t = "n";
+                cell.z = "m/d/yyyy";
+            }
+        }
+    }
+}
+
 const isValidXlsx = (f) => {
     if (!f) return false;
     const nameOk = f.name.toLowerCase().endsWith(".xlsx");
@@ -122,39 +139,33 @@ export default function FixMids() {
             const idx = {
                 airline: findIdx([
                     "Airline 3 digit code",
-                    "Airline3DigitCode",
-                    "airline_3d",
                 ]),
                 bill: findIdx([
                     "Master Bill Number",
-                    "MasterBillNumber",
-                    "master_bill_no",
-                    "MBL",
-                    "MB",
                 ]),
-                importer: findIdx(["ImporterID", "importer_id"]),
+                importer: findIdx(["ImporterID"]),
                 airport: findIdx([
                     "Arrival Airport",
                     "ArrivalAirport",
-                    "arrival_airport",
                 ]),
-                date: findIdx([
+                // NEW: four date columns
+                entryDate: findIdx(["EntryDate", "Entry Date"]),
+                importDate: findIdx(["ImportDate", "Import Date"]),
+                exportDate: findIdx([
+                    "Date of Export",
+                ]),
+                arrivalDate: findIdx([
                     "Arrival Date",
                     "ArrivalDate",
-                    "ETA",
-                    "arrival_date",
                 ]),
+
                 name: findIdx([
                     "ManufacturerName",
                     "Manufacturer Name",
-                    "SupplierName",
-                    "manufacturer_name",
                 ]),
                 mid: findIdx([
                     "ManufacturerCode",
                     "Manufacturer Code",
-                    "MID",
-                    "Bad ManufacturerCode",
                 ]),
             };
 
@@ -228,9 +239,9 @@ export default function FixMids() {
                                 ? null
                                 : (r[header[idx.airport]] ?? "").toString(),
                         arrival_date:
-                            idx.date === -1
+                            idx.arrivalDate === -1
                                 ? null
-                                : (r[header[idx.date]] ?? "").toString(),
+                                : (r[header[idx.arrivalDate]] ?? "").toString(),
                         manufacturer_name,
                         bad_mid,
                         good_mid: hit.good_mid,
@@ -265,6 +276,14 @@ export default function FixMids() {
                     .join("\n");
 
             // 8) download ZIP (updated original + compact log)
+            fmtDateCols(
+                ws,
+                idx.entryDate,
+                idx.importDate,
+                idx.exportDate,
+                idx.arrivalDate
+            );
+
             const outBuf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
             const zip = new JSZip();
             zip.file(`results_${file.name}`, outBuf);
