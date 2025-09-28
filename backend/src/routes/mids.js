@@ -69,7 +69,6 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
     }
 }
 
-
 /** bulk insert helper (global actions only) */
 async function insertGlobal(db, action, branch, person, rows) {
     if (!rows.length) return { inserted: 0, total: 0 };
@@ -78,7 +77,7 @@ async function insertGlobal(db, action, branch, person, rows) {
         const sql = `
       INSERT INTO midmap.change_log
         (changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)
-      SELECT NOW(), 'global_alias', $1, $2, x.bad_mid, x.good_mid, NULL
+      SELECT clock_timestamp(), 'global_alias', $1, $2, x.bad_mid, x.good_mid, NULL
       FROM jsonb_to_recordset($3::jsonb) AS x(bad_mid text, good_mid text)
       ON CONFLICT DO NOTHING
       RETURNING id
@@ -95,7 +94,7 @@ async function insertGlobal(db, action, branch, person, rows) {
         const sql = `
       INSERT INTO midmap.change_log
         (changed_at, action, changed_by, actor_branch, bad_mid, good_mid, manufacturer_name)
-      SELECT NOW(), 'global_name', $1, $2, NULL, x.good_mid, x.manufacturer_name
+      SELECT clock_timestamp(), 'global_name', $1, $2, NULL, x.good_mid, x.manufacturer_name
       FROM jsonb_to_recordset($3::jsonb) AS x(manufacturer_name text, good_mid text)
       ON CONFLICT DO NOTHING
       RETURNING id
