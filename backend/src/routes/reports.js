@@ -59,54 +59,62 @@ router.get("/grouped", async (req, res) => {
 
     // Build aggregation so "by" (changed_by) is preserved per pair
     const cte = `
-    with base as (
-      select
-        cl.arrival_date::date   as arrival_date,
-        cl.airline_3d,
-        cl.master_bill_no,
-        cl.client_name,
-        cl.actor_branch         as branch,
-        cl.bad_mid,
-        cl.good_mid,
-        cl.manufacturer_name,
-        cl.action               as method,
-        nullif(trim(cl.changed_by), '') as changed_by
-      from midmap.change_log cl
-      ${sql}
-    ),
-    pairs as (
-      select
-        arrival_date, airline_3d, master_bill_no, client_name, branch,
-        bad_mid, good_mid, manufacturer_name,
-        coalesce(changed_by,'') as changed_by,
-        min(method) as method,
-        count(*) as cnt
-      from base
-      group by
-        arrival_date, airline_3d, master_bill_no, client_name, branch,
-        bad_mid, good_mid, manufacturer_name, changed_by
-    ),
-    shipments as (
-      select
-        arrival_date,
-        (airline_3d || '-' || master_bill_no) as shipment,
-        client_name as client,
-        branch,
-        sum(cnt) as changes_count,
-        jsonb_agg(
-          jsonb_build_object(
-            'bad_mid', bad_mid,
-            'good_mid', good_mid,
-            'manufacturer_name', coalesce(manufacturer_name,''),
-            'method', method,
-            'by', changed_by,
-            'count', cnt
-          )
-          order by bad_mid, good_mid, changed_by
-        ) as pairs
-      from pairs
-      group by arrival_date, airline_3d, master_bill_no, client_name, branch
-    )
+        with base as (
+            select
+                cl.arrival_date::date                        as arrival_date,
+                cl.airline_3d,
+                cl.master_bill_no,
+                cl.client_name,
+                cl.actor_branch                              as branch,
+                cl.bad_mid,
+                cl.good_mid,
+                /* use the logged name if present, otherwise the canonical name */
+                coalesce(
+                nullif(trim(cl.manufacturer_name), ''),
+                nullif(trim(cm.manufacturer_name), '')
+                )                                            as manufacturer_name,
+                cl.action                                    as method,
+                nullif(trim(cl.changed_by), '')              as changed_by
+            from midmap.change_log cl
+            left join midmap.canonical_manufacturers cm
+                on cm.good_mid = cl.good_mid
+            -- your WHERE goes here
+            ${sql}
+            ),
+            pairs as (
+            select
+                arrival_date, airline_3d, master_bill_no, client_name, branch,
+                bad_mid, good_mid, manufacturer_name,
+                coalesce(changed_by,'') as changed_by,
+                min(method) as method,
+                count(*) as cnt
+            from base
+            group by
+                arrival_date, airline_3d, master_bill_no, client_name, branch,
+                bad_mid, good_mid, manufacturer_name, changed_by
+            ),
+            shipments as (
+            select
+                arrival_date,
+                (airline_3d || '-' || master_bill_no) as shipment,
+                client_name as client,
+                branch,
+                sum(cnt) as changes_count,
+                jsonb_agg(
+                jsonb_build_object(
+                    'bad_mid', bad_mid,
+                    'good_mid', good_mid,
+                    'manufacturer_name', coalesce(manufacturer_name, ''),
+                    'method', method,
+                    'by', changed_by,
+                    'count', cnt
+                )
+                order by bad_mid, good_mid, changed_by
+                ) as pairs
+            from pairs
+            group by arrival_date, airline_3d, master_bill_no, client_name, branch
+            )
+
   `;
 
     const wantCSV = (req.query.format || "").toLowerCase() === "csv";
