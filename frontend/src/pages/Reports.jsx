@@ -82,11 +82,42 @@ export default function Reports() {
         }
     }
 
+    // auto-load whenever filters/offset/limit change
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            setLoading(true);
+            setErr("");
+            try {
+                const r = await fetch(`${API}/reports/grouped?${qs}`, {
+                    cache: "no-store",
+                });
+                if (!r.ok) throw new Error(await r.text());
+                const j = await r.json();
+                if (cancelled) return;
+                setRows(j.rows || []);
+                setTotal(j.total || 0);
+                setLimit(j.limit || 100);
+                setOffset(j.offset || 0);
+            } catch (e) {
+                if (!cancelled) {
+                    setErr(e.message || "Failed to load.");
+                    setRows([]);
+                    setTotal(0);
+                }
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [qs]);
+
     // Search button
-    const onSearch = async (e) => {
+    const onSearch = (e) => {
         e.preventDefault();
-        setOffset(0);
-        await load();
+        setOffset(0); // effect will reload
     };
 
     // paging
@@ -247,28 +278,18 @@ export default function Reports() {
                         <button
                             className="btn btn-outline-secondary btn-sm"
                             disabled={!canPrev || loading}
-                            onClick={() => {
-                                if (canPrev) {
-                                    setOffset(Math.max(0, offset - limit));
-                                    setTimeout(load, 0);
-                                }
-                            }}
+                            onClick={() =>
+                                canPrev &&
+                                setOffset(Math.max(0, offset - limit))
+                            }
                         >
                             ‹ Prev
                         </button>
-                        <div className="text-muted small">
-                            Page {Math.floor(offset / limit) + 1} of{" "}
-                            {Math.max(1, Math.ceil(total / limit))}
-                        </div>
+
                         <button
                             className="btn btn-outline-secondary btn-sm"
                             disabled={!canNext || loading}
-                            onClick={() => {
-                                if (canNext) {
-                                    setOffset(offset + limit);
-                                    setTimeout(load, 0);
-                                }
-                            }}
+                            onClick={() => canNext && setOffset(offset + limit)}
                         >
                             Next ›
                         </button>
@@ -308,16 +329,24 @@ function ShipmentCard({ data }) {
                             key={i}
                             className="badge rounded-pill text-bg-light border"
                         >
-                            <code className="me-1">
-                                {p.bad_mid} → {p.good_mid}
-                            </code>
-                            {p.manufacturer_name && (
-                                <span className="text-muted small ms-1">
-                                    {p.manufacturer_name}
-                                </span>
+                            {p.manufacturer_name ? (
+                                <>
+                                    <span className="fw-semibold">
+                                        {p.manufacturer_name}
+                                    </span>
+                                    <span className="mx-1">:</span>
+                                    <code>
+                                        {p.bad_mid} → {p.good_mid}
+                                    </code>
+                                </>
+                            ) : (
+                                <code>
+                                    {p.bad_mid} → {p.good_mid}
+                                </code>
                             )}
                         </span>
                     ))}
+
                     {more > 0 && !expanded && (
                         <button
                             type="button"
