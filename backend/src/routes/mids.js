@@ -37,17 +37,23 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
     }
 
     // 3) name_mappings → canonical.id (same filter as in step 1)
+    // 3) name_mappings → canonical.id (same filter as step 1)
     if (nameRows.length) {
         await db.query(
-            `
-      WITH cm AS (SELECT id, good_mid FROM midmap.canonical_manufacturers)
-      INSERT INTO midmap.name_mappings (manufacturer_name, good_manufacturer_id, created_by, created_at)
-      SELECT x.manufacturer_name, cm.id, $2, clock_timestamp()
-      FROM jsonb_to_recordset($1::jsonb) AS x(manufacturer_name text, good_mid text)
-      WHERE btrim(x.manufacturer_name) <> ''
+                `
+        WITH cm AS (
+        SELECT id, good_mid FROM midmap.canonical_manufacturers
+        )
+        INSERT INTO midmap.name_mappings
+        (manufacturer_name, good_manufacturer_id, created_by, created_at)
+        SELECT
+        x.manufacturer_name, cm.id, $2, clock_timestamp()
+        FROM jsonb_to_recordset($1::jsonb)
+        AS x(manufacturer_name text, good_mid text)
+        JOIN cm ON cm.good_mid = x.good_mid
+        WHERE btrim(x.manufacturer_name) <> ''
         AND upper(btrim(x.manufacturer_name)) <> upper(btrim(x.good_mid))
-      JOIN cm ON cm.good_mid = x.good_mid
-      ON CONFLICT DO NOTHING
+        ON CONFLICT DO NOTHING
     `,
             [JSON.stringify(nameRows), person || null]
         );
