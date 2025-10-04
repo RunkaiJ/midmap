@@ -311,18 +311,25 @@ export default function FixMids() {
                 });
             }
 
-            // (B) Trim FDAPRODUCTCODE values
+            // (B) Normalize FDAPRODUCTCODE: remove ALL whitespace
             if (idx.fda !== -1) {
-                const fdaCol = idx.fda;
+                const col = idx.fda;
+                const key = header[col];
+
                 rows.forEach((r, i) => {
-                    const raw = r[header[fdaCol]] ?? "";
-                    const trimmed = raw.toString().trim();
-                    if (raw !== trimmed) {
-                        writeTextCell(ws, fdaCol, i + 2, trimmed);
+                    const raw = r[key];
+                    if (raw == null) return;
+
+                    // remove spaces, tabs, newlines, etc.
+                    const normalized = String(raw).replace(/\s+/g, "");
+
+                    if (normalized !== String(raw)) {
+                        writeTextCell(ws, col, i + 2, normalized);
+                        r[key] = normalized; // optional: keep rows[] in sync
                     }
                 });
             }
-
+            
             // 6) send per-row changes to backend (includes required branch)
             await logChanges(changeRows);
 
