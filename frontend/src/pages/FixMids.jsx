@@ -5,6 +5,66 @@ import { saveAs } from "file-saver";
 
 const API = import.meta.env.VITE_API_BASE;
 
+// Tiny helpers to write text cells
+const writeTextCell = (ws, colIndex, row1Based, text) => {
+    const addr = XLSX.utils.encode_cell({ c: colIndex, r: row1Based - 1 });
+    ws[addr] = { t: "s", v: text };
+};
+
+function trimTrailingEmpty(ws) {
+    const ref = ws["!ref"] || "A1";
+    const range = XLSX.utils.decode_range(ref);
+    let R0 = range.s.r,
+        C0 = range.s.c,
+        R1 = range.e.r,
+        C1 = range.e.c;
+
+    // trim empty rows from bottom
+    while (R1 >= R0) {
+        let hasData = false;
+        for (let c = C0; c <= C1; c++) {
+            const cell = ws[XLSX.utils.encode_cell({ r: R1, c })];
+            if (
+                cell &&
+                cell.v != null &&
+                (typeof cell.v === "number" || String(cell.v).trim() !== "")
+            ) {
+                hasData = true;
+                break;
+            }
+        }
+        if (hasData) break;
+        for (let c = C0; c <= C1; c++)
+            delete ws[XLSX.utils.encode_cell({ r: R1, c })];
+        R1--;
+    }
+
+    // trim empty columns from right
+    while (C1 >= C0) {
+        let hasData = false;
+        for (let r = R0; r <= R1; r++) {
+            const cell = ws[XLSX.utils.encode_cell({ r, c: C1 })];
+            if (
+                cell &&
+                cell.v != null &&
+                (typeof cell.v === "number" || String(cell.v).trim() !== "")
+            ) {
+                hasData = true;
+                break;
+            }
+        }
+        if (hasData) break;
+        for (let r = R0; r <= R1; r++)
+            delete ws[XLSX.utils.encode_cell({ r, c: C1 })];
+        C1--;
+    }
+
+    ws["!ref"] = XLSX.utils.encode_range({
+        s: { r: R0, c: C0 },
+        e: { r: Math.max(R0, R1), c: Math.max(C0, C1) },
+    });
+}
+
 // Make chosen columns display as m/d/yyyy (for cells that already hold serials)
 function fmtDateCols(ws, ...colIdx) {
     const rng = XLSX.utils.decode_range(ws["!ref"]);
@@ -137,36 +197,20 @@ export default function FixMids() {
             };
 
             const idx = {
-                airline: findIdx([
-                    "Airline 3 digit code",
-                ]),
-                bill: findIdx([
-                    "Master Bill Number",
-                ]),
+                airline: findIdx(["Airline 3 digit code"]),
+                bill: findIdx(["Master Bill Number"]),
                 importer: findIdx(["ImporterID"]),
-                airport: findIdx([
-                    "Arrival Airport",
-                    "ArrivalAirport",
-                ]),
+                airport: findIdx(["Arrival Airport", "ArrivalAirport"]),
                 // NEW: four date columns
                 entryDate: findIdx(["EntryDate", "Entry Date"]),
                 importDate: findIdx(["ImportDate", "Import Date"]),
-                exportDate: findIdx([
-                    "Date of Export",
-                ]),
-                arrivalDate: findIdx([
-                    "Arrival Date",
-                    "ArrivalDate",
-                ]),
+                exportDate: findIdx(["Date of Export"]),
+                arrivalDate: findIdx(["Arrival Date", "ArrivalDate"]),
 
-                name: findIdx([
-                    "ManufacturerName",
-                    "Manufacturer Name",
-                ]),
-                mid: findIdx([
-                    "ManufacturerCode",
-                    "Manufacturer Code",
-                ]),
+                name: findIdx(["ManufacturerName", "Manufacturer Name"]),
+                mid: findIdx(["ManufacturerCode", "Manufacturer Code"]),
+                house: findIdx(["House AWB"]),
+                fda: findIdx(["FDAPRODUCTCODE"]),
             };
 
             if (idx.mid === -1)
@@ -250,6 +294,35 @@ export default function FixMids() {
                 }
             });
 
+            // (A) If House AWB is blank, copy Master Bill Number into it
+            if (idx.house !== -1 && idx.bill !== -1) {
+                const houseCol = idx.house;
+                rows.forEach((r, i) => {
+                    const house = (r[header[houseCol]] ?? "").toString().trim();
+                    if (!house) {
+                        const bill = (r[header[idx.bill]] ?? "")
+                            .toString()
+                            .trim();
+                        if (bill) {
+                            // write as text to preserve leading zeros if any
+                            writeTextCell(ws, houseCol, i + 2, bill);
+                        }
+                    }
+                });
+            }
+
+            // (B) Trim FDAPRODUCTCODE values
+            if (idx.fda !== -1) {
+                const fdaCol = idx.fda;
+                rows.forEach((r, i) => {
+                    const raw = r[header[fdaCol]] ?? "";
+                    const trimmed = raw.toString().trim();
+                    if (raw !== trimmed) {
+                        writeTextCell(ws, fdaCol, i + 2, trimmed);
+                    }
+                });
+            }
+
             // 6) send per-row changes to backend (includes required branch)
             await logChanges(changeRows);
 
@@ -284,7 +357,14 @@ export default function FixMids() {
                 idx.arrivalDate
             );
 
-            const outBuf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+            trimTrailingEmpty(ws);
+
+            const outBuf = XLSX.write(wb, {
+                type: "array",
+                bookType: "xlsx",
+                compression: true, // <-- compress inner XLSX
+                bookSST: true, // often shrinks files with lots of repeated strings
+            });
             const zip = new JSZip();
             zip.file(`results_${file.name}`, outBuf);
             zip.file(`log_${file.name.replace(/\.xlsx$/i, "")}.csv`, logCsv);
