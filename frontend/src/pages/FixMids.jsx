@@ -3,6 +3,12 @@ import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 
+const MODES = {
+    SHEIN: "shein",
+    BOOHOO_PURE: "boohoo_pure",
+    BOOHOO_HYBRID: "boohoo_hybrid",
+};
+
 const API = import.meta.env.VITE_API_BASE;
 
 // Tiny helpers to write text cells
@@ -102,6 +108,33 @@ export default function FixMids() {
     const [status, setStatus] = useState(null);
     const [changesJson, setChangesJson] = useState("");
     const [busy, setBusy] = useState(false);
+
+    // NEW: client mode + airline input (hybrid only) + HTS map
+    const [mode, setMode] = useState(MODES.SHEIN);
+    const [airlineInput, setAirlineInput] = useState(""); // shown only for Hybrid
+    const [htsMap, setHtsMap] = useState({}); // {bad:"good", ...}
+
+    // Load HTS map lazily for BOOHOO modes (no-op if 404)
+    useEffect(() => {
+        let cancelled = false;
+        if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
+            (async () => {
+                try {
+                    const r = await fetch(`${API}/boohoo/hts-map`, {
+                        cache: "no-store",
+                    });
+                    if (!r.ok) return; // silently skip until backend ready
+                    const j = await r.json();
+                    if (!cancelled && j && typeof j === "object") setHtsMap(j);
+                } catch (_) {}
+            })();
+        } else {
+            setHtsMap({});
+        }
+        return () => {
+            cancelled = true;
+        };
+    }, [mode]);
 
     // Load branches for the select
     useEffect(() => {
@@ -211,6 +244,21 @@ export default function FixMids() {
                 mid: findIdx(["ManufacturerCode", "Manufacturer Code"]),
                 house: findIdx(["House AWB"]),
                 fda: findIdx(["FDAPRODUCTCODE"]),
+
+                // NEW: BOOHOO-specific columns
+                manuCountry: findIdx([
+                    "ManufacturerCountry",
+                    "Manufacturer Country",
+                ]),
+                manuPostal: findIdx([
+                    "ManufacturerPostalCode",
+                    "Manufacturer Postal Code",
+                ]),
+                hts1: findIdx(["HTS-1", "HTS 1"]),
+                hts2: findIdx(["HTS-2", "HTS 2"]),
+                groupId: findIdx(["GroupIdentifier", "Group Identifier"]),
+                flightNo: findIdx(["Voyage Flight No", "VoyageFlightNo"]),
+                carrierCode: findIdx(["Carrier Code", "CarrierCode"]),
             };
 
             if (idx.mid === -1)
@@ -329,7 +377,35 @@ export default function FixMids() {
                     }
                 });
             }
-            
+
+            /* ---------------- BOOHOO rules via backend ---------------- */
+            if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
+                const resp = await fetch(`${API}/boohoo/transform`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        mode, // "BOOHOO_PURE" | "BOOHOO_HYBRID"
+                        airline3d: airlineInput || "", // required for HYBRID, "" for PURE
+                        rows, // the parsed row objects from Excel
+                    }),
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+                const { ok, patches, error } = await resp.json();
+                if (!ok) throw new Error(error || "Boohoo transform failed");
+
+                // Apply backend patches
+                for (const p of patches) {
+                    // p = { row: 0-based data row index, col: "Header Name", value: "new text" }
+                    const colIdx = header.findIndex(
+                        (h) => h.trim() === p.col.trim()
+                    );
+                    if (colIdx !== -1) {
+                        writeTextCell(ws, colIdx, p.row + 2, String(p.value));
+                        rows[p.row][header[colIdx]] = String(p.value); // keep parsed rows in sync
+                    }
+                }
+            }
+
             // 6) send per-row changes to backend (includes required branch)
             await logChanges(changeRows);
 
@@ -397,11 +473,6 @@ export default function FixMids() {
         <div className="row">
             <div className="col-xl-8 col-lg-9">
                 <h2 className="mb-3">Fix Mids (Excel Upload)</h2>
-                <p className="text-muted">
-                    We modify only the <strong>ManufacturerCode</strong> column,
-                    prefer <em>alias</em> over <em>name</em>, log changes, and
-                    download a ZIP (updated Excel + compact log).
-                </p>
 
                 {status && (
                     <div className={`alert alert-${status.type}`}>
@@ -426,6 +497,40 @@ export default function FixMids() {
                                 <div className="form-text">
                                     Selected: {file.name} (
                                     {Math.round(file.size / 1024)} KB)
+                                </div>
+                            )}
+                        </div>
+                        <div className="row g-3 mb-3">
+                            <div className="col-md-6">
+                                <label className="form-label">Mode</label>
+                                <select
+                                    className="form-select"
+                                    value={mode}
+                                    onChange={(e) => setMode(e.target.value)}
+                                >
+                                    <option value={MODES.SHEIN}>SHEIN</option>
+                                    <option value={MODES.BOOHOO_PURE}>
+                                        BOOHOO — Pure
+                                    </option>
+                                    <option value={MODES.BOOHOO_HYBRID}>
+                                        BOOHOO — Hybrid
+                                    </option>
+                                </select>
+                            </div>
+
+                            {mode === MODES.BOOHOO_HYBRID && (
+                                <div className="col-md-6">
+                                    <label className="form-label">
+                                        Airline 3 digit code
+                                    </label>
+                                    <input
+                                        className="form-control"
+                                        placeholder="e.g. 235"
+                                        value={airlineInput}
+                                        onChange={(e) =>
+                                            setAirlineInput(e.target.value)
+                                        }
+                                    />
                                 </div>
                             )}
                         </div>
