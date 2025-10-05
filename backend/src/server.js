@@ -19,6 +19,7 @@ app.use("/api/resolve", require("./routes/resolve"));
 app.use("/api/log", require("./routes/log"));
 app.use("/api/mids", require("./routes/mids"));
 app.use("/api/reports", require("./routes/reports"));
+app.use("/api/boohoo", require("./routes/boohoo"));
 
 // ---- friendly error for oversized payloads
 app.use((err, _req, res, next) => {
