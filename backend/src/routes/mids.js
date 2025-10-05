@@ -5,19 +5,40 @@ const clean = (s) => (s ?? "").toString().trim();
 const up = (s) => clean(s).toUpperCase();
 
 async function applyToCanonical(db, aliasRows, nameRows, person) {
-    // 1) Upsert canonical from *names* (preferred name source)
+    // 1) Upsert canonical from *names* (pick 1 row per good_mid to avoid multi-update)
     if (nameRows.length) {
         await db.query(
             `
-      INSERT INTO midmap.canonical_manufacturers (good_mid, manufacturer_name, created_at)
-      SELECT x.good_mid, x.manufacturer_name, clock_timestamp()
+    WITH raw AS (
+      SELECT
+        upper(btrim(x.good_mid)) AS good_mid,
+        btrim(x.manufacturer_name) AS manufacturer_name
       FROM jsonb_to_recordset($1::jsonb) AS x(good_mid text, manufacturer_name text)
-      WHERE btrim(x.manufacturer_name) <> ''
-        AND upper(btrim(x.manufacturer_name)) <> upper(btrim(x.good_mid))
-      ON CONFLICT (good_mid) DO UPDATE
-        SET manufacturer_name = EXCLUDED.manufacturer_name
-        WHERE midmap.canonical_manufacturers.manufacturer_name IS DISTINCT FROM EXCLUDED.manufacturer_name
-    `,
+    ),
+    norm AS (
+      SELECT good_mid, manufacturer_name
+      FROM raw
+      WHERE manufacturer_name <> ''
+        AND upper(manufacturer_name) <> good_mid   -- ignore "name == MID"
+    ),
+    -- choose ONE row per good_mid to avoid "affect row a second time"
+    dedup AS (
+      SELECT good_mid, manufacturer_name,
+             row_number() OVER (
+               PARTITION BY good_mid
+               ORDER BY length(manufacturer_name) DESC, manufacturer_name
+             ) AS rn
+      FROM norm
+    )
+    INSERT INTO midmap.canonical_manufacturers (good_mid, manufacturer_name, created_at)
+    SELECT good_mid, manufacturer_name, clock_timestamp()
+    FROM dedup
+    WHERE rn = 1
+    ON CONFLICT (good_mid) DO UPDATE
+      SET manufacturer_name = EXCLUDED.manufacturer_name
+    WHERE btrim(midmap.canonical_manufacturers.manufacturer_name)
+          IS DISTINCT FROM btrim(EXCLUDED.manufacturer_name);
+  `,
             [JSON.stringify(nameRows)]
         );
     }
@@ -36,25 +57,29 @@ async function applyToCanonical(db, aliasRows, nameRows, person) {
         );
     }
 
-    // 3) name_mappings → canonical.id (same filter as in step 1)
-    // 3) name_mappings → canonical.id (same filter as step 1)
+    // 3) name_mappings → canonical.id (insert all distinct pairs)
     if (nameRows.length) {
         await db.query(
-                `
-        WITH cm AS (
-        SELECT id, good_mid FROM midmap.canonical_manufacturers
-        )
-        INSERT INTO midmap.name_mappings
-        (manufacturer_name, good_manufacturer_id, created_by, created_at)
-        SELECT
-        x.manufacturer_name, cm.id, $2, clock_timestamp()
-        FROM jsonb_to_recordset($1::jsonb)
-        AS x(manufacturer_name text, good_mid text)
-        JOIN cm ON cm.good_mid = x.good_mid
-        WHERE btrim(x.manufacturer_name) <> ''
-        AND upper(btrim(x.manufacturer_name)) <> upper(btrim(x.good_mid))
-        ON CONFLICT DO NOTHING
-    `,
+            `
+    WITH raw AS (
+      SELECT
+        upper(btrim(x.good_mid)) AS good_mid,
+        btrim(x.manufacturer_name) AS manufacturer_name
+      FROM jsonb_to_recordset($1::jsonb) AS x(good_mid text, manufacturer_name text)
+    ),
+    norm AS (
+      SELECT DISTINCT good_mid, manufacturer_name
+      FROM raw
+      WHERE manufacturer_name <> ''
+        AND upper(manufacturer_name) <> good_mid
+    ),
+    cm AS (SELECT id, good_mid FROM midmap.canonical_manufacturers)
+    INSERT INTO midmap.name_mappings (manufacturer_name, good_manufacturer_id, created_by, created_at)
+    SELECT n.manufacturer_name, cm.id, $2, clock_timestamp()
+    FROM norm n
+    JOIN cm ON cm.good_mid = n.good_mid
+    ON CONFLICT DO NOTHING;
+  `,
             [JSON.stringify(nameRows), person || null]
         );
     }
