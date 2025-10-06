@@ -259,6 +259,7 @@ export default function FixMids() {
                 groupId: findIdx(["GroupIdentifier", "Group Identifier"]),
                 flightNo: findIdx(["Voyage Flight No", "VoyageFlightNo"]),
                 carrierCode: findIdx(["Carrier Code", "CarrierCode"]),
+                hts: findIdx(["HTS"]),
             };
 
             if (idx.mid === -1)
@@ -378,7 +379,7 @@ export default function FixMids() {
                 });
             }
 
-            /* ---------------- BOOHOO rules via backend ---------------- */
+            /* ---------------- BOOHOO rules ---------------- */
             if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
                 const resp = await fetch(`${API}/boohoo/transform`, {
                     method: "POST",
@@ -386,22 +387,56 @@ export default function FixMids() {
                     body: JSON.stringify({
                         mode, // "BOOHOO_PURE" | "BOOHOO_HYBRID"
                         airline3d: airlineInput || "", // required for HYBRID, "" for PURE
-                        rows, // the parsed row objects from Excel
+                        rows, // parsed row objects
                     }),
                 });
                 if (!resp.ok) throw new Error(await resp.text());
                 const { ok, patches, error } = await resp.json();
                 if (!ok) throw new Error(error || "Boohoo transform failed");
 
-                // Apply backend patches
+                // Apply backend patches (case-insensitive column match)
                 for (const p of patches) {
-                    // p = { row: 0-based data row index, col: "Header Name", value: "new text" }
                     const colIdx = header.findIndex(
-                        (h) => h.trim() === p.col.trim()
+                        (h) =>
+                            h.trim().toLowerCase() ===
+                            String(p.col).trim().toLowerCase()
                     );
                     if (colIdx !== -1) {
-                        writeTextCell(ws, colIdx, p.row + 2, String(p.value));
-                        rows[p.row][header[colIdx]] = String(p.value); // keep parsed rows in sync
+                        const val = p.value == null ? "" : String(p.value);
+                        writeTextCell(ws, colIdx, p.row + 2, val);
+                        rows[p.row][header[colIdx]] = val; // keep parsed rows in sync
+                    }
+                }
+
+                // Frontend HTS remap for a single "HTS" column (backend already handles HTS-1/2/3/4)
+                if (idx.hts !== -1) {
+                    const mapResp = await fetch(`${API}/boohoo/hts-map`);
+                    if (mapResp.ok) {
+                        const { map: rawMap = {} } = await mapResp.json();
+
+                        const norm = (s) =>
+                            String(s ?? "")
+                                .replace(/[^0-9A-Za-z]/g, "")
+                                .toUpperCase();
+
+                        // normalize keys once for fast lookup
+                        const htsMap = new Map(
+                            Object.entries(rawMap).map(([k, v]) => [
+                                norm(k),
+                                String(v),
+                            ])
+                        );
+
+                        const key = header[idx.hts];
+                        rows.forEach((r, i) => {
+                            const raw = r[key];
+                            if (raw == null) return;
+                            const fixed = htsMap.get(norm(raw));
+                            if (fixed && fixed !== raw) {
+                                writeTextCell(ws, idx.hts, i + 2, fixed); // Excel row = dataIndex + 2
+                                r[key] = fixed; // keep rows[] in sync
+                            }
+                        });
                     }
                 }
             }
