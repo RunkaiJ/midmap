@@ -12,7 +12,7 @@ const MODES = {
 };
 
 // load mapping (sync at boot; tiny file)
-const htsMapPath = path.resolve(__dirname, "..", "data", "boohoo_hts_map.json");
+const htsMapPath = path.resolve(__dirname, "../..", "data", "boohoo_hts_map.json");
 let HTS_MAP = {};
 try {
     HTS_MAP = JSON.parse(fs.readFileSync(htsMapPath, "utf8"));
