@@ -124,15 +124,17 @@ function applyHybrid(row, patches, airline3d) {
 
 /**
  * GET /boohoo/hts-map
- * Serve the HTS mapping (cacheable)
+ * Serve the HTS mapping (no caching)
  */
 router.get("/hts-map", (_req, res) => {
-    res.set(
-        "Cache-Control",
-        "public, max-age=86400, stale-while-revalidate=86400"
-    );
+    // Explicitly disable caching
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+
     res.json({ ok: true, map: HTS_MAP });
 });
+
 
 /**
  * POST /boohoo/transform
