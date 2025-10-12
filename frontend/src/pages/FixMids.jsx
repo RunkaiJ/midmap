@@ -410,7 +410,10 @@ export default function FixMids() {
 
                 // Frontend HTS remap for a single "HTS" column (backend already handles HTS-1/2/3/4)
                 if (idx.hts !== -1) {
-                    const mapResp = await fetch(`${API}/boohoo/hts-map`);
+                    const mapResp = await fetch(`${API}/boohoo/hts-map`, {
+                        cache: "no-store",
+                    });
+
                     if (mapResp.ok) {
                         const { map: rawMap = {} } = await mapResp.json();
 
