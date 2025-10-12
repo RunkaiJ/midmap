@@ -360,7 +360,7 @@ export default function FixMids() {
                 });
             }
 
-            // (B) Normalize FDAPRODUCTCODE: remove ALL whitespace
+            // (B) Normalize FDAPRODUCTCODE: if comma-separated, keep the first code; remove ALL whitespace
             if (idx.fda !== -1) {
                 const col = idx.fda;
                 const key = header[col];
@@ -369,12 +369,20 @@ export default function FixMids() {
                     const raw = r[key];
                     if (raw == null) return;
 
-                    // remove spaces, tabs, newlines, etc.
-                    const normalized = String(raw).replace(/\s+/g, "");
+                    // split on commas, take first non-empty token
+                    const firstToken =
+                        String(raw)
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean)[0] || "";
 
+                    // remove spaces/tabs/newlines inside the selected token
+                    const normalized = firstToken.replace(/\s+/g, "");
+
+                    // write only if changed
                     if (normalized !== String(raw)) {
                         writeTextCell(ws, col, i + 2, normalized);
-                        r[key] = normalized; // optional: keep rows[] in sync
+                        r[key] = normalized; // keep rows[] in sync
                     }
                 });
             }
