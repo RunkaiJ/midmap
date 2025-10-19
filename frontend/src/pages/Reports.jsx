@@ -6,7 +6,7 @@ export default function Reports() {
     const [clients, setClients] = useState([]);
     const [branches, setBranches] = useState([]);
 
-    const excelHref = `${API}/reports/table.xlsx?${qs}`;
+
 
     // filters
     const [client, setClient] = useState("");
@@ -60,6 +60,8 @@ export default function Reports() {
         p.set("offset", String(offset));
         return p.toString();
     }, [client, branch, from, to, limit, offset]);
+
+    const excelHref = `${API}/reports/table.xlsx?${qs}`;
 
     // fetch data whenever qs changes
     useEffect(() => {
