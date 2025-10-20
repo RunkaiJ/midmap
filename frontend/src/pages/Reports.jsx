@@ -347,92 +347,68 @@ function ResultsTable({ rows, filters, loading }) {
                     </tr>
                     <tr>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="MAWB"
-                                    value={fMawb}
-                                    onChange={onChange(setFMawb)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="MAWB"
+                                value={fMawb}
+                                onChange={onChange(setFMawb)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="Wrong MID"
-                                    value={fWrong}
-                                    onChange={onChange(setFWrong)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="Wrong MID"
+                                value={fWrong}
+                                onChange={onChange(setFWrong)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="Correct MID"
-                                    value={fCorrect}
-                                    onChange={onChange(setFCorrect)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="Correct MID"
+                                value={fCorrect}
+                                onChange={onChange(setFCorrect)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="Name"
-                                    value={fName}
-                                    onChange={onChange(setFName)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="Name"
+                                value={fName}
+                                onChange={onChange(setFName)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="Address"
-                                    value={fAddress}
-                                    onChange={onChange(setFAddress)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="Address"
+                                value={fAddress}
+                                onChange={onChange(setFAddress)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="City"
-                                    value={fCity}
-                                    onChange={onChange(setFCity)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="City"
+                                value={fCity}
+                                onChange={onChange(setFCity)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="Zipcode"
-                                    value={fZip}
-                                    onChange={onChange(setFZip)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="Zipcode"
+                                value={fZip}
+                                onChange={onChange(setFZip)}
+                            />
                         </th>
                         <th>
-                            <div className="input-group input-group-sm">
-                                <span className="input-group-text">🔎</span>
-                                <input
-                                    className="form-control"
-                                    placeholder="Notes"
-                                    value={fNotes}
-                                    onChange={onChange(setFNotes)}
-                                />
-                            </div>
+                            <input
+                                className="form-control form-control-sm"
+                                placeholder="Notes"
+                                value={fNotes}
+                                onChange={onChange(setFNotes)}
+                            />
                         </th>
                     </tr>
                 </thead>
