@@ -4,8 +4,7 @@ const router = express.Router();
 const clean = (s) => (s ?? "").toString().trim();
 
 function buildColumnFilters(q, startIndex = 1) {
-    // Returns { sql: "AND ...", params: [...] } to append after the CTE
-    // We assume we're filtering the final "rows" CTE fields.
+    // filters only on visible columns (no note)
     const p = [];
     const w = [];
 
@@ -22,21 +21,14 @@ function buildColumnFilters(q, startIndex = 1) {
     add("address", q.address);
     add("city", q.city);
     add("zipcode", q.zipcode);
-    add("note", q.notes);
 
-    return {
-        sql: w.length ? " AND " + w.join(" AND ") : "",
-        params: p,
-    };
+    return { sql: w.length ? " AND " + w.join(" AND ") : "", params: p };
 }
-
 
 function buildFilters(q) {
     const p = [];
-    // Always exclude global actions from reports
     const where = ["cl.action NOT IN ('global_alias','global_name')"];
 
-    // Branch filter will target COALESCE(b.station, cl.actor_branch)
     if (q.branch) {
         p.push(clean(q.branch));
         where.push(`COALESCE(b.station, cl.actor_branch) = $${p.length}`);
@@ -54,13 +46,10 @@ function buildFilters(q) {
         where.push(`cl.arrival_date::date <= $${p.length}::date`);
     }
 
-    return {
-        sql: "WHERE " + where.join(" AND "),
-        params: p,
-    };
+    return { sql: "WHERE " + where.join(" AND "), params: p };
 }
 
-// --- meta (filters) ---------------------------------------------------------
+// --- meta -------------------------------------------------------------------
 router.get("/meta", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const db = req.app.get("pg");
@@ -73,172 +62,14 @@ router.get("/meta", async (req, res) => {
         db
             .query(
                 `select station, port_code, (station || ' | ' || port_code) as label
-           from midmap.branches
-          order by station`
+              from midmap.branches order by station`
             )
             .then((r) => r.rows),
     ]);
     res.json({ clients, branches });
 });
 
-// // --- grouped (JSON for UI) + CSV export ------------------------------------
-// router.get("/grouped", async (req, res) => {
-//     const db = req.app.get("pg");
-//     const { sql, params } = buildFilters(req.query);
-
-//     // Build aggregation so "by" (changed_by) is preserved per pair
-//     const cte = `
-//         WITH base AS (
-//             SELECT
-//             cl.arrival_date::date                         AS arrival_date,
-//             cl.airline_3d,
-//             cl.master_bill_no,
-//             cl.client_name,
-//             -- Branch determined by arrival airport when possible
-//             COALESCE(b.station, cl.actor_branch)          AS branch,
-//             cl.bad_mid,
-//             cl.good_mid,
-//             /* logged name if present, otherwise canonical name */
-//             COALESCE(
-//                 NULLIF(TRIM(cl.manufacturer_name), ''),
-//                 NULLIF(TRIM(cm.manufacturer_name), '')
-//             )                                             AS manufacturer_name,
-//             cl.action                                     AS method,
-//             NULLIF(TRIM(cl.changed_by), '')               AS changed_by
-//             FROM midmap.change_log cl
-//             LEFT JOIN midmap.canonical_manufacturers cm
-//             ON cm.good_mid = cl.good_mid
-//             LEFT JOIN midmap.branches b
-//             ON b.port_code = cl.arrival_airport
-//             -- your WHERE goes here
-//             ${sql}
-//         ),
-//         pairs AS (
-//             SELECT
-//             arrival_date, airline_3d, master_bill_no, client_name, branch,
-//             bad_mid, good_mid, manufacturer_name,
-//             COALESCE(changed_by,'') AS changed_by,
-//             MIN(method) AS method,
-//             COUNT(*) AS cnt
-//             FROM base
-//             GROUP BY
-//             arrival_date, airline_3d, master_bill_no, client_name, branch,
-//             bad_mid, good_mid, manufacturer_name, changed_by
-//         ),
-//         shipments AS (
-//             SELECT
-//             arrival_date,
-//             (airline_3d || '-' || master_bill_no) AS shipment,
-//             client_name AS client,
-//             branch,
-//             SUM(cnt) AS changes_count,
-//             jsonb_agg(
-//                 jsonb_build_object(
-//                 'bad_mid', bad_mid,
-//                 'good_mid', good_mid,
-//                 'manufacturer_name', COALESCE(manufacturer_name, ''),
-//                 'method', method,
-//                 'by', changed_by,
-//                 'count', cnt
-//                 )
-//                 ORDER BY bad_mid, good_mid, changed_by
-//             ) AS pairs
-//             FROM pairs
-//             GROUP BY arrival_date, airline_3d, master_bill_no, client_name, branch
-//         )
-//     `;
-
-
-//     const wantCSV = (req.query.format || "").toLowerCase() === "csv";
-//     if (!wantCSV) {
-//         const limit = Math.max(
-//             1,
-//             Math.min(500, Number(req.query.limit || 100))
-//         );
-//         const offset = Math.max(0, Number(req.query.offset || 0));
-
-//         const totalSql = `
-//       ${cte}
-//       select count(*)::int as total
-//         from (select 1 from shipments) t;
-//     `;
-//         const dataSql = `
-//         ${cte}
-//         select
-//             to_char(arrival_date, 'YYYY-MM-DD') as arrival_date,
-//             shipment, client, branch, changes_count, pairs
-//         from shipments
-//         order by arrival_date desc, shipment
-//         limit $${params.length + 1} offset $${params.length + 2};
-//         `;
-//         const [tot, data] = await Promise.all([
-//             db.query(totalSql, params).then((r) => r.rows[0].total),
-//             db.query(dataSql, [...params, limit, offset]).then((r) => r.rows),
-//         ]);
-//         return res.json({ total: tot, limit, offset, rows: data });
-//     }
-
-//     // Human-readable CSV
-//     const exportSql = `
-//     ${cte}
-//     select
-//         to_char(arrival_date, 'YYYY-MM-DD') as arrival_date,
-//         shipment, client, branch, changes_count, pairs
-//     from shipments
-//     order by arrival_date desc, shipment;
-//     `;
-//     const rows = await db.query(exportSql, params).then((r) => r.rows);
-
-//     const header = [
-//         "arrival_date",
-//         "shipment",
-//         "client",
-//         "branch",
-//         "changes",
-//         "people",
-//         "pairs", // e.g. BAD -> GOOD ×3; BAD2 -> GOOD2
-//     ].join(",");
-
-//     const lines = [header];
-
-//     rows.forEach((r) => {
-//         const ppl = uniq(
-//             (r.pairs || []).map((p) => (p.by || "").trim()).filter(Boolean)
-//         ).join("; ");
-//         const pairText = (r.pairs || [])
-//             .map((p) => {
-//                 const cnt = p.count > 1 ? ` ×${p.count}` : "";
-//                 const left = (p.manufacturer_name || "").trim();
-//                 return left
-//                     ? `${left}: ${p.bad_mid} -> ${p.good_mid}${cnt}`
-//                     : `${p.bad_mid} -> ${p.good_mid}${cnt}`;
-//             })
-//             .join("; ");
-
-
-//         lines.push(
-//             [
-//                 csvEsc(r.arrival_date),
-//                 csvEsc(r.shipment),
-//                 csvEsc(r.client || ""),
-//                 csvEsc(r.branch || ""),
-//                 r.changes_count ?? 0,
-//                 csvEsc(ppl),
-//                 csvEsc(pairText),
-//             ].join(",")
-//         );
-//     });
-
-//     const out = lines.join("\n");
-//     res.setHeader(
-//         "content-disposition",
-//         `attachment; filename="midmap_report_${Date.now()}.csv"`
-//     );
-//     res.setHeader("content-type", "text/csv; charset=utf-8");
-//     res.send(out);
-// });
-
-// --- flat table report -------------------------------------------------------
+// --- JSON table --------------------------------------------------------------
 router.get("/table", async (req, res) => {
     res.set("Cache-Control", "no-store");
     const db = req.app.get("pg");
@@ -257,8 +88,7 @@ router.get("/table", async (req, res) => {
         cl.bad_mid,
         NULLIF(TRIM(cl.good_mid), '')        AS logged_good_mid
       FROM midmap.change_log cl
-      LEFT JOIN midmap.branches b
-        ON b.port_code = cl.arrival_airport
+      LEFT JOIN midmap.branches b ON b.port_code = cl.arrival_airport
       ${baseFilters.sql}
     ),
     aliasmap AS (
@@ -280,17 +110,10 @@ router.get("/table", async (req, res) => {
           WHEN am.alias_canon_id IS NOT NULL
                AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
           THEN am.alias_canon_id
-          WHEN lg.logged_canon_id IS NOT NULL THEN lg.logged_canon_id
+          WHEN lg.logged_canon_id IS NOT NULL
+          THEN lg.logged_canon_id
           ELSE am.alias_canon_id
-        END AS chosen_canon_id,
-        CASE
-          WHEN am.alias_canon_id IS NOT NULL
-               AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
-          THEN 'a more accurate replacement would be ' || am.alias_good_mid
-          WHEN lg.logged_canon_id IS NULL AND am.alias_canon_id IS NULL
-          THEN 'no canonical found'
-          ELSE ''
-        END AS note
+        END AS chosen_canon_id
       FROM base ba
       LEFT JOIN aliasmap am ON am.bad_mid = ba.bad_mid
       LEFT JOIN logged   lg ON lg.good_mid = ba.logged_good_mid
@@ -306,15 +129,13 @@ router.get("/table", async (req, res) => {
         cm.manufacturer_name            AS name,
         COALESCE(cm.address, '')        AS address,
         COALESCE(cm.city, '')           AS city,
-        COALESCE(cm.zipcode, '')        AS zipcode,
-        ch.note
+        COALESCE(cm.zipcode, '')        AS zipcode
       FROM chosen ch
       LEFT JOIN midmap.canonical_manufacturers cm
         ON cm.id = ch.chosen_canon_id
     )
   `;
 
-    // column filters apply to the final "rows" CTE
     const colFilter = buildColumnFilters(
         req.query,
         baseFilters.params.length + 1
@@ -331,7 +152,7 @@ router.get("/table", async (req, res) => {
     ${cte}
     SELECT
       to_char(arrival_date, 'YYYY-MM-DD') AS arrival_date,
-      client, branch, mawb, wrong_mid, correct_mid, name, address, city, zipcode, note
+      client, branch, mawb, wrong_mid, correct_mid, name, address, city, zipcode
     FROM rows
     WHERE 1=1 ${colFilter.sql}
     ORDER BY arrival_date DESC, mawb, wrong_mid
@@ -340,14 +161,15 @@ router.get("/table", async (req, res) => {
   `;
 
     try {
-        const allParams = baseFilters.params;
-        const totalParams = [...allParams, ...colFilter.params];
-        const dataParams = [...allParams, ...colFilter.params, limit, offset];
+        const base = baseFilters.params;
+        const totalParams = [...base, ...colFilter.params];
+        const dataParams = [...base, ...colFilter.params, limit, offset];
 
         const [tot, data] = await Promise.all([
             db.query(totalSql, totalParams).then((r) => r.rows[0].total),
             db.query(dataSql, dataParams).then((r) => r.rows),
         ]);
+
         res.json({ total: tot, limit, offset, rows: data });
     } catch (e) {
         console.error("GET /reports/table error:", e);
@@ -355,12 +177,11 @@ router.get("/table", async (req, res) => {
     }
 });
 
-
+// --- Excel export ------------------------------------------------------------
 const ExcelJS = require("exceljs");
 
 router.get("/table.xlsx", async (req, res) => {
     const db = req.app.get("pg");
-
     const baseFilters = buildFilters(req.query);
 
     const cte = `
@@ -373,8 +194,7 @@ router.get("/table.xlsx", async (req, res) => {
         cl.bad_mid,
         NULLIF(TRIM(cl.good_mid), '')        AS logged_good_mid
       FROM midmap.change_log cl
-      LEFT JOIN midmap.branches b
-        ON b.port_code = cl.arrival_airport
+      LEFT JOIN midmap.branches b ON b.port_code = cl.arrival_airport
       ${baseFilters.sql}
     ),
     aliasmap AS (
@@ -395,17 +215,10 @@ router.get("/table.xlsx", async (req, res) => {
           WHEN am.alias_canon_id IS NOT NULL
                AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
           THEN am.alias_canon_id
-          WHEN lg.logged_canon_id IS NOT NULL THEN lg.logged_canon_id
+          WHEN lg.logged_canon_id IS NOT NULL
+          THEN lg.logged_canon_id
           ELSE am.alias_canon_id
-        END AS chosen_canon_id,
-        CASE
-          WHEN am.alias_canon_id IS NOT NULL
-               AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
-          THEN 'a more accurate replacement would be ' || am.alias_good_mid
-          WHEN lg.logged_canon_id IS NULL AND am.alias_canon_id IS NULL
-          THEN 'no canonical found'
-          ELSE ''
-        END AS note
+        END AS chosen_canon_id
       FROM base ba
       LEFT JOIN aliasmap am ON am.bad_mid = ba.bad_mid
       LEFT JOIN logged   lg ON lg.good_mid = ba.logged_good_mid
@@ -418,8 +231,7 @@ router.get("/table.xlsx", async (req, res) => {
         cm.manufacturer_name            AS name,
         COALESCE(cm.address, '')        AS address,
         COALESCE(cm.city, '')           AS city,
-        COALESCE(cm.zipcode, '')        AS zipcode,
-        ch.note
+        COALESCE(cm.zipcode, '')        AS zipcode
       FROM chosen ch
       LEFT JOIN midmap.canonical_manufacturers cm
         ON cm.id = ch.chosen_canon_id
@@ -433,11 +245,20 @@ router.get("/table.xlsx", async (req, res) => {
 
     const sql = `
     ${cte}
-    SELECT mawb, wrong_mid, correct_mid, name, address, city, zipcode, note
+    SELECT
+        mawb,
+        wrong_mid,
+        correct_mid,
+        name,
+        address,
+        city,
+        zipcode,
+        ''::text AS note           
     FROM rows
     WHERE 1=1 ${colFilter.sql}
     ORDER BY mawb, wrong_mid;
-  `;
+    `;
+
 
     try {
         const dataParams = [...baseFilters.params, ...colFilter.params];
@@ -479,7 +300,6 @@ router.get("/table.xlsx", async (req, res) => {
         res.status(500).send(e.message || "Failed to generate Excel");
     }
 });
-
 
 module.exports = router;
 

@@ -23,13 +23,11 @@ export default function Reports() {
     const [clients, setClients] = useState([]);
     const [branches, setBranches] = useState([]);
 
-    // meta filters
     const [client, setClient] = useState("");
     const [branch, setBranch] = useState("");
     const [from, setFrom] = useState("");
     const [to, setTo] = useState("");
 
-    // column filters
     const [fMawb, setFMawb] = useState("");
     const [fWrong, setFWrong] = useState("");
     const [fCorrect, setFCorrect] = useState("");
@@ -37,9 +35,7 @@ export default function Reports() {
     const [fAddress, setFAddress] = useState("");
     const [fCity, setFCity] = useState("");
     const [fZip, setFZip] = useState("");
-    const [fNotes, setFNotes] = useState("");
 
-    // debounced filters
     const dMawb = useDebounced(fMawb);
     const dWrong = useDebounced(fWrong);
     const dCorrect = useDebounced(fCorrect);
@@ -47,9 +43,7 @@ export default function Reports() {
     const dAddress = useDebounced(fAddress);
     const dCity = useDebounced(fCity);
     const dZip = useDebounced(fZip);
-    const dNotes = useDebounced(fNotes);
 
-    // data
     const [rows, setRows] = useState([]);
     const [total, setTotal] = useState(0);
     const [limit, setLimit] = useState(100);
@@ -57,7 +51,6 @@ export default function Reports() {
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
 
-    // load meta
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -79,7 +72,6 @@ export default function Reports() {
         };
     }, []);
 
-    // query string
     const qs = useMemo(() => {
         const p = new URLSearchParams();
         if (client) p.set("client", client);
@@ -93,7 +85,6 @@ export default function Reports() {
         if (dAddress) p.set("address", dAddress);
         if (dCity) p.set("city", dCity);
         if (dZip) p.set("zipcode", dZip);
-        if (dNotes) p.set("notes", dNotes);
         p.set("limit", String(limit));
         p.set("offset", String(offset));
         return p.toString();
@@ -109,12 +100,10 @@ export default function Reports() {
         dAddress,
         dCity,
         dZip,
-        dNotes,
         limit,
         offset,
     ]);
 
-    // fetch data
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -154,7 +143,6 @@ export default function Reports() {
             <div className="col-12">
                 <h2 className="mb-3">Reports</h2>
 
-                {/* Filters */}
                 <div className="card mb-3">
                     <div className="card-header fw-semibold">Filters</div>
                     <div className="card-body">
@@ -230,7 +218,6 @@ export default function Reports() {
 
                 {err && <div className="alert alert-danger">{err}</div>}
 
-                {/* Results */}
                 <div className="card">
                     <div className="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
                         <div className="fw-semibold">Results</div>
@@ -268,8 +255,6 @@ export default function Reports() {
                                 setFCity,
                                 fZip,
                                 setFZip,
-                                fNotes,
-                                setFNotes,
                                 setOffset,
                             }}
                         />
@@ -316,8 +301,6 @@ function ResultsTable({ rows, filters, loading }) {
         setFCity,
         fZip,
         setFZip,
-        fNotes,
-        setFNotes,
         setOffset,
     } = filters;
 
@@ -343,7 +326,6 @@ function ResultsTable({ rows, filters, loading }) {
                         <th style={{ minWidth: 480 }}>Address</th>
                         <th style={{ minWidth: 160 }}>City</th>
                         <th style={{ width: 120 }}>Zipcode</th>
-                        <th style={{ minWidth: 200 }}>Notes</th>
                     </tr>
                     <tr>
                         <th>
@@ -402,21 +384,13 @@ function ResultsTable({ rows, filters, loading }) {
                                 onChange={onChange(setFZip)}
                             />
                         </th>
-                        <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="Notes"
-                                value={fNotes}
-                                onChange={onChange(setFNotes)}
-                            />
-                        </th>
                     </tr>
                 </thead>
 
                 <tbody className="table-group-divider">
                     {loading && (
                         <tr>
-                            <td colSpan={8} className="text-center py-5">
+                            <td colSpan={7} className="text-center py-5">
                                 <div
                                     className="spinner-border spinner-border-sm me-2"
                                     role="status"
@@ -425,18 +399,16 @@ function ResultsTable({ rows, filters, loading }) {
                             </td>
                         </tr>
                     )}
-
                     {!loading && rows.length === 0 && (
                         <tr>
                             <td
-                                colSpan={8}
+                                colSpan={7}
                                 className="text-center py-5 text-muted"
                             >
                                 No data. Adjust filters to broaden your search.
                             </td>
                         </tr>
                     )}
-
                     {!loading &&
                         rows.map((r, i) => (
                             <tr key={i}>
@@ -448,11 +420,6 @@ function ResultsTable({ rows, filters, loading }) {
                                 </td>
                                 <td>
                                     <CodeChip>{r.correct_mid}</CodeChip>
-                                    {r.note ? (
-                                        <span className="ms-2 badge rounded-pill text-bg-warning-subtle border">
-                                            review
-                                        </span>
-                                    ) : null}
                                 </td>
                                 <td className="fw-semibold">{r.name || ""}</td>
                                 <td
@@ -463,7 +430,6 @@ function ResultsTable({ rows, filters, loading }) {
                                 </td>
                                 <td>{r.city || ""}</td>
                                 <td>{r.zipcode || ""}</td>
-                                <td className="text-muted">{r.note || ""}</td>
                             </tr>
                         ))}
                 </tbody>
