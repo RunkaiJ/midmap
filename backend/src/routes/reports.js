@@ -3,6 +3,34 @@ const router = express.Router();
 
 const clean = (s) => (s ?? "").toString().trim();
 
+function buildColumnFilters(q, startIndex = 1) {
+    // Returns { sql: "AND ...", params: [...] } to append after the CTE
+    // We assume we're filtering the final "rows" CTE fields.
+    const p = [];
+    const w = [];
+
+    function add(colKey, param) {
+        if (!param) return;
+        p.push(`%${clean(param)}%`);
+        w.push(`${colKey} ILIKE $${startIndex + p.length - 1}`);
+    }
+
+    add("mawb", q.mawb);
+    add("wrong_mid", q.wrong_mid);
+    add("correct_mid", q.correct_mid);
+    add("name", q.name);
+    add("address", q.address);
+    add("city", q.city);
+    add("zipcode", q.zipcode);
+    add("note", q.notes);
+
+    return {
+        sql: w.length ? " AND " + w.join(" AND ") : "",
+        params: p,
+    };
+}
+
+
 function buildFilters(q) {
     const p = [];
     // Always exclude global actions from reports
@@ -212,20 +240,14 @@ router.get("/meta", async (req, res) => {
 
 // --- flat table report -------------------------------------------------------
 router.get("/table", async (req, res) => {
-  res.set("Cache-Control", "no-store");
-  const db = req.app.get("pg");
-  const { sql, params } = buildFilters(req.query);
+    res.set("Cache-Control", "no-store");
+    const db = req.app.get("pg");
 
-  const limit  = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
-  const offset = Math.max(0, Number(req.query.offset || 0));
+    const baseFilters = buildFilters(req.query);
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+    const offset = Math.max(0, Number(req.query.offset || 0));
 
-  // CTE layout:
-  // base     = change_log filtered + computed branch + MAWB
-  // aliasmap = bad_mid -> (canonical id, canonical good_mid)
-  // logged   = good_mid -> canonical id (if good_mid exists as canonical)
-  // chosen   = decide which canonical to use for the row, and build Notes
-  // rows     = join chosen canonical to details (name/address/city/zip)
-  const cte = `
+    const cte = `
     WITH base AS (
       SELECT
         cl.arrival_date::date                AS arrival_date,
@@ -237,16 +259,12 @@ router.get("/table", async (req, res) => {
       FROM midmap.change_log cl
       LEFT JOIN midmap.branches b
         ON b.port_code = cl.arrival_airport
-      ${sql}
+      ${baseFilters.sql}
     ),
     aliasmap AS (
-      SELECT
-        ma.bad_mid,
-        cm.id       AS alias_canon_id,
-        cm.good_mid AS alias_good_mid
+      SELECT ma.bad_mid, cm.id AS alias_canon_id, cm.good_mid AS alias_good_mid
       FROM midmap.mid_aliases ma
-      JOIN midmap.canonical_manufacturers cm
-        ON cm.id = ma.good_manufacturer_id
+      JOIN midmap.canonical_manufacturers cm ON cm.id = ma.good_manufacturer_id
     ),
     logged AS (
       SELECT cm.good_mid, cm.id AS logged_canon_id
@@ -259,13 +277,10 @@ router.get("/table", async (req, res) => {
         am.alias_canon_id, am.alias_good_mid,
         lg.logged_canon_id,
         CASE
-          -- if alias suggests a different canonical (or logged missing), prefer alias
           WHEN am.alias_canon_id IS NOT NULL
                AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
           THEN am.alias_canon_id
-          -- else, if the logged good_mid exists, use it
           WHEN lg.logged_canon_id IS NOT NULL THEN lg.logged_canon_id
-          -- fallback: alias if present, else NULL
           ELSE am.alias_canon_id
         END AS chosen_canon_id,
         CASE
@@ -286,12 +301,12 @@ router.get("/table", async (req, res) => {
         ch.client_name AS client,
         ch.branch,
         ch.mawb,
-        ch.bad_mid,
-        cm.good_mid        AS correct_mid,
-        cm.manufacturer_name AS name,
-        COALESCE(cm.address, '')  AS address,
-        COALESCE(cm.city, '')     AS city,
-        COALESCE(cm.zipcode, '')  AS zipcode,
+        ch.bad_mid                      AS wrong_mid,
+        cm.good_mid                     AS correct_mid,
+        cm.manufacturer_name            AS name,
+        COALESCE(cm.address, '')        AS address,
+        COALESCE(cm.city, '')           AS city,
+        COALESCE(cm.zipcode, '')        AS zipcode,
         ch.note
       FROM chosen ch
       LEFT JOIN midmap.canonical_manufacturers cm
@@ -299,112 +314,89 @@ router.get("/table", async (req, res) => {
     )
   `;
 
-  const totalSql = `
+    // column filters apply to the final "rows" CTE
+    const colFilter = buildColumnFilters(
+        req.query,
+        baseFilters.params.length + 1
+    );
+
+    const totalSql = `
     ${cte}
-    SELECT COUNT(*)::int AS total FROM rows;
+    SELECT COUNT(*)::int AS total
+    FROM rows
+    WHERE 1=1 ${colFilter.sql};
   `;
 
-  const dataSql = `
+    const dataSql = `
     ${cte}
     SELECT
       to_char(arrival_date, 'YYYY-MM-DD') AS arrival_date,
-      client, branch,
-      mawb,
-      bad_mid      AS wrong_mid,
-      correct_mid,
-      name, address, city, zipcode,
-      note
+      client, branch, mawb, wrong_mid, correct_mid, name, address, city, zipcode, note
     FROM rows
-    ORDER BY arrival_date DESC, mawb, bad_mid
-    LIMIT $${params.length + 1} OFFSET $${params.length + 2};
+    WHERE 1=1 ${colFilter.sql}
+    ORDER BY arrival_date DESC, mawb, wrong_mid
+    LIMIT $${baseFilters.params.length + colFilter.params.length + 1}
+    OFFSET $${baseFilters.params.length + colFilter.params.length + 2};
   `;
 
-  try {
-    const [tot, data] = await Promise.all([
-      db.query(totalSql, params).then(r => r.rows[0].total),
-      db.query(dataSql, [...params, limit, offset]).then(r => r.rows),
-    ]);
-    res.json({ total: tot, limit, offset, rows: data });
-  } catch (e) {
-    console.error("GET /reports/table error:", e);
-    res.status(500).send(e.message || "Internal error");
-  }
+    try {
+        const allParams = baseFilters.params;
+        const totalParams = [...allParams, ...colFilter.params];
+        const dataParams = [...allParams, ...colFilter.params, limit, offset];
+
+        const [tot, data] = await Promise.all([
+            db.query(totalSql, totalParams).then((r) => r.rows[0].total),
+            db.query(dataSql, dataParams).then((r) => r.rows),
+        ]);
+        res.json({ total: tot, limit, offset, rows: data });
+    } catch (e) {
+        console.error("GET /reports/table error:", e);
+        res.status(500).send(e.message || "Internal error");
+    }
 });
+
 
 const ExcelJS = require("exceljs");
 
 // --- Excel export ------------------------------------------------------------
 router.get("/table.xlsx", async (req, res) => {
-    const db = req.app.get("pg");
-    const { sql, params } = buildFilters(req.query);
+      const db = req.app.get("pg");
 
-    // same CTE logic as /reports/table, but no LIMIT/OFFSET (export all matches)
-    const cte = `
-    WITH base AS (
-      SELECT
-        cl.arrival_date::date                AS arrival_date,
-        cl.client_name,
-        COALESCE(b.station, cl.actor_branch) AS branch,
-        (cl.airline_3d || '-' || cl.master_bill_no) AS mawb,
-        cl.bad_mid,
-        NULLIF(TRIM(cl.good_mid), '')        AS logged_good_mid
-      FROM midmap.change_log cl
-      LEFT JOIN midmap.branches b
-        ON b.port_code = cl.arrival_airport
-      ${sql}
-    ),
-    aliasmap AS (
-      SELECT
-        ma.bad_mid,
-        cm.id       AS alias_canon_id,
-        cm.good_mid AS alias_good_mid
-      FROM midmap.mid_aliases ma
-      JOIN midmap.canonical_manufacturers cm
-        ON cm.id = ma.good_manufacturer_id
-    ),
-    logged AS (
-      SELECT cm.good_mid, cm.id AS logged_canon_id
-      FROM midmap.canonical_manufacturers cm
-    ),
-    chosen AS (
-      SELECT
-        ba.mawb, ba.bad_mid, ba.logged_good_mid,
-        am.alias_canon_id, am.alias_good_mid,
-        lg.logged_canon_id,
-        CASE
-          WHEN am.alias_canon_id IS NOT NULL
-               AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
-          THEN am.alias_canon_id
-          WHEN lg.logged_canon_id IS NOT NULL
-          THEN lg.logged_canon_id
-          ELSE am.alias_canon_id
-        END AS chosen_canon_id,
-        CASE
-          WHEN am.alias_canon_id IS NOT NULL
-               AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
-          THEN 'a more accurate replacement would be ' || am.alias_good_mid
-          WHEN lg.logged_canon_id IS NULL AND am.alias_canon_id IS NULL
-          THEN 'no canonical found'
-          ELSE ''
-        END AS note
-      FROM base ba
-      LEFT JOIN aliasmap am ON am.bad_mid = ba.bad_mid
-      LEFT JOIN logged   lg ON lg.good_mid = ba.logged_good_mid
-    )
-    SELECT
-      ch.mawb,
-      ch.bad_mid                              AS wrong_mid,
-      cm.good_mid                             AS correct_mid,
-      cm.manufacturer_name                    AS name,
-      COALESCE(cm.address, '')                AS address,
-      COALESCE(cm.city, '')                   AS city,
-      COALESCE(cm.zipcode, '')                AS zipcode,
-      ch.note
-    FROM chosen ch
-    LEFT JOIN midmap.canonical_manufacturers cm
-      ON cm.id = ch.chosen_canon_id
-    ORDER BY ch.mawb, ch.bad_mid;
-  `;
+      const baseFilters = buildFilters(req.query);
+
+      const cte = `
+        WITH base AS ( ... ${baseFilters.sql} ... ),
+        aliasmap AS ( ... ),
+        logged   AS ( ... ),
+        chosen   AS ( ... ),
+        rows AS (
+        SELECT
+            ch.mawb,
+            ch.bad_mid                              AS wrong_mid,
+            cm.good_mid                             AS correct_mid,
+            cm.manufacturer_name                    AS name,
+            COALESCE(cm.address, '')                AS address,
+            COALESCE(cm.city, '')                   AS city,
+            COALESCE(cm.zipcode, '')                AS zipcode,
+            ch.note
+        FROM chosen ch
+        LEFT JOIN midmap.canonical_manufacturers cm
+            ON cm.id = ch.chosen_canon_id
+        )
+    `;
+
+      const colFilter = buildColumnFilters(
+          req.query,
+          baseFilters.params.length + 1
+      );
+
+      const sql = `
+        ${cte}
+        SELECT mawb, wrong_mid, correct_mid, name, address, city, zipcode, note
+        FROM rows
+        WHERE 1=1 ${colFilter.sql}
+        ORDER BY mawb, wrong_mid;
+    `;
 
     try {
         const rows = await db.query(cte, params).then((r) => r.rows);
