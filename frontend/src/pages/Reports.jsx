@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import "./reports.css"; // ⬅️ NEW: bring in styles
+import "../reports.css"; 
 
 const API = import.meta.env.VITE_API_BASE;
 
