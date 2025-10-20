@@ -1,23 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-
-const styles = `
-.table-fixed { table-layout: fixed; }
-.cell-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.header-sticky { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 rgba(0,0,0,.06); }
-.code-chip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
-.th-resizable { position: relative; }
-.th-resize-handle {
-  position: absolute; right: 0; top: 0; width: 8px; height: 100%;
-  cursor: col-resize; user-select: none;
-}
-.table-hover tbody tr:hover { background: #f8f9fa; }
-.table thead input.form-control {
-  background: #fff; border-color: #e9ecef;
-}
-.badge-soft {
-  background: #f8f9fc; border: 1px solid #eef1f5; color: #475569;
-}
-`;
+import "./reports.css"; // ⬅️ NEW: bring in styles
 
 const API = import.meta.env.VITE_API_BASE;
 
@@ -158,152 +140,145 @@ export default function Reports() {
     const canNext = offset + limit < total;
 
     return (
-        <div>
-            <style dangerouslySetInnerHTML={{ __html: styles }} />
-            <div className="row">
-                <div className="col-12">
-                    <h2 className="mb-3">Reports</h2>
+        <div className="row">
+            <div className="col-12">
+                <h2 className="mb-3">Reports</h2>
 
-                    <div className="card mb-3">
-                        <div className="card-header fw-semibold">Filters</div>
-                        <div className="card-body">
-                            <div className="row g-3">
-                                <div className="col-md-3">
-                                    <label className="form-label">Client</label>
-                                    <select
-                                        className="form-select"
-                                        value={client}
-                                        onChange={(e) => {
-                                            setClient(e.target.value);
-                                            setOffset(0);
-                                        }}
-                                    >
-                                        <option value="">All</option>
-                                        {clients.map((c) => (
-                                            <option key={c} value={c}>
-                                                {c}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="col-md-3">
-                                    <label className="form-label">Branch</label>
-                                    <select
-                                        className="form-select"
-                                        value={branch}
-                                        onChange={(e) => {
-                                            setBranch(e.target.value);
-                                            setOffset(0);
-                                        }}
-                                    >
-                                        <option value="">All</option>
-                                        {branches.map((b) => (
-                                            <option
-                                                key={b.station}
-                                                value={b.station}
-                                            >
-                                                {b.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div className="col-md-3">
-                                    <label className="form-label">
-                                        Arrival From
-                                    </label>
-                                    <input
-                                        type="date"
-                                        className="form-control"
-                                        value={from}
-                                        onChange={(e) => {
-                                            setFrom(e.target.value);
-                                            setOffset(0);
-                                        }}
-                                    />
-                                </div>
-                                <div className="col-md-3">
-                                    <label className="form-label">
-                                        Arrival To
-                                    </label>
-                                    <input
-                                        type="date"
-                                        className="form-control"
-                                        value={to}
-                                        onChange={(e) => {
-                                            setTo(e.target.value);
-                                            setOffset(0);
-                                        }}
-                                    />
-                                </div>
+                <div className="card mb-3">
+                    <div className="card-header fw-semibold">Filters</div>
+                    <div className="card-body">
+                        <div className="row g-3">
+                            <div className="col-md-3">
+                                <label className="form-label">Client</label>
+                                <select
+                                    className="form-select"
+                                    value={client}
+                                    onChange={(e) => {
+                                        setClient(e.target.value);
+                                        setOffset(0);
+                                    }}
+                                >
+                                    <option value="">All</option>
+                                    {clients.map((c) => (
+                                        <option key={c} value={c}>
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="col-md-3">
+                                <label className="form-label">Branch</label>
+                                <select
+                                    className="form-select"
+                                    value={branch}
+                                    onChange={(e) => {
+                                        setBranch(e.target.value);
+                                        setOffset(0);
+                                    }}
+                                >
+                                    <option value="">All</option>
+                                    {branches.map((b) => (
+                                        <option
+                                            key={b.station}
+                                            value={b.station}
+                                        >
+                                            {b.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="col-md-3">
+                                <label className="form-label">
+                                    Arrival From
+                                </label>
+                                <input
+                                    type="date"
+                                    className="form-control"
+                                    value={from}
+                                    onChange={(e) => {
+                                        setFrom(e.target.value);
+                                        setOffset(0);
+                                    }}
+                                />
+                            </div>
+                            <div className="col-md-3">
+                                <label className="form-label">Arrival To</label>
+                                <input
+                                    type="date"
+                                    className="form-control"
+                                    value={to}
+                                    onChange={(e) => {
+                                        setTo(e.target.value);
+                                        setOffset(0);
+                                    }}
+                                />
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    {err && <div className="alert alert-danger">{err}</div>}
+                {err && <div className="alert alert-danger">{err}</div>}
 
-                    <div className="card">
-                        <div className="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
-                            <div className="fw-semibold">Results</div>
-                            <div className="ms-auto d-flex align-items-center gap-3 small text-muted">
-                                <span>{total} total</span>
-                                <span>showing {rows.length}</span>
-                                <span>offset {offset}</span>
-                                <a
-                                    className="btn btn-sm btn-outline-success"
-                                    href={`${API}/reports/table.xlsx?${qs}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                >
-                                    Export Excel
-                                </a>
-                            </div>
-                        </div>
-
-                        <div className="card-body p-0">
-                            <ResultsTable
-                                rows={rows}
-                                loading={loading}
-                                filters={{
-                                    fMawb,
-                                    setFMawb,
-                                    fWrong,
-                                    setFWrong,
-                                    fCorrect,
-                                    setFCorrect,
-                                    fName,
-                                    setFName,
-                                    fAddress,
-                                    setFAddress,
-                                    fCity,
-                                    setFCity,
-                                    fZip,
-                                    setFZip,
-                                    setOffset,
-                                }}
-                            />
-                        </div>
-
-                        <div className="d-flex justify-content-between align-items-center p-3 border-top">
-                            <button
-                                className="btn btn-outline-secondary btn-sm"
-                                disabled={!canPrev || loading}
-                                onClick={() =>
-                                    canPrev &&
-                                    setOffset(Math.max(0, offset - limit))
-                                }
+                <div className="card">
+                    <div className="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
+                        <div className="fw-semibold">Results</div>
+                        <div className="ms-auto d-flex align-items-center gap-3 small text-muted">
+                            <span>{total} total</span>
+                            <span>showing {rows.length}</span>
+                            <span>offset {offset}</span>
+                            <a
+                                className="btn btn-sm btn-outline-success"
+                                href={`${API}/reports/table.xlsx?${qs}`}
+                                target="_blank"
+                                rel="noreferrer"
                             >
-                                ‹ Prev
-                            </button>
-                            <button
-                                className="btn btn-outline-secondary btn-sm"
-                                disabled={!canNext || loading}
-                                onClick={() =>
-                                    canNext && setOffset(offset + limit)
-                                }
-                            >
-                                Next ›
-                            </button>
+                                Export Excel
+                            </a>
                         </div>
+                    </div>
+
+                    <div className="card-body p-0">
+                        <ResultsTable
+                            rows={rows}
+                            loading={loading}
+                            filters={{
+                                fMawb,
+                                setFMawb,
+                                fWrong,
+                                setFWrong,
+                                fCorrect,
+                                setFCorrect,
+                                fName,
+                                setFName,
+                                fAddress,
+                                setFAddress,
+                                fCity,
+                                setFCity,
+                                fZip,
+                                setFZip,
+                                setOffset,
+                            }}
+                        />
+                    </div>
+
+                    <div className="d-flex justify-content-between align-items-center p-3 border-top">
+                        <button
+                            className="btn btn-outline-secondary btn-sm"
+                            disabled={!canPrev || loading}
+                            onClick={() =>
+                                canPrev &&
+                                setOffset(Math.max(0, offset - limit))
+                            }
+                        >
+                            ‹ Prev
+                        </button>
+                        <button
+                            className="btn btn-outline-secondary btn-sm"
+                            disabled={!canNext || loading}
+                            onClick={() => canNext && setOffset(offset + limit)}
+                        >
+                            Next ›
+                        </button>
                     </div>
                 </div>
             </div>
@@ -330,15 +305,15 @@ function ResultsTable({ rows, filters, loading }) {
         setOffset,
     } = filters;
 
-    // Column widths (pixels). You can tweak the initial numbers.
     const [widths, setWidths] = useState([160, 180, 180, 280, 520, 180, 120]);
-    const [drag, setDrag] = useState(null); // { index, startX, startW }
+    const [drag, setDrag] = useState(null);
 
     const startResize = (idx, e) => {
         setDrag({ index: idx, startX: e.clientX, startW: widths[idx] });
         e.preventDefault();
         e.stopPropagation();
     };
+
     useEffect(() => {
         if (!drag) return;
         const onMove = (e) => {
@@ -362,8 +337,7 @@ function ResultsTable({ rows, filters, loading }) {
     };
 
     return (
-        <div className="table-responsive" style={{ maxHeight: "70vh" }}>
-            {/* Use colgroup so resizing updates width reliably */}
+        <div className="table-responsive table-wrap">
             <table className="table table-sm table-hover align-middle mb-0 table-fixed">
                 <colgroup>
                     {widths.map((w, i) => (
@@ -384,7 +358,9 @@ function ResultsTable({ rows, filters, loading }) {
                         ].map((label, i) => (
                             <th key={label} className="th-resizable">
                                 <div className="d-flex align-items-center justify-content-between">
-                                    <span className="fw-semibold">{label}</span>
+                                    <span className="fw-semibold th-label">
+                                        {label}
+                                    </span>
                                 </div>
                                 <span
                                     className="th-resize-handle"
@@ -395,7 +371,6 @@ function ResultsTable({ rows, filters, loading }) {
                         ))}
                     </tr>
 
-                    {/* filter row */}
                     <tr>
                         <th>
                             <input
@@ -507,8 +482,6 @@ function ResultsTable({ rows, filters, loading }) {
                                         {r.correct_mid || "—"}
                                     </span>
                                 </td>
-
-                                {/* Text cells truncate with tooltip */}
                                 <td
                                     className="fw-semibold cell-trunc"
                                     title={r.name || ""}

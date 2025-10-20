@@ -1,0 +1,47 @@
+/* ---- Reports table styles ---- */
+
+/* Keep columns stable and resizable with <colgroup> */
+.table-fixed { table-layout: fixed; }
+
+/* Truncate long text (full value still shown via title tooltip) */
+.cell-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Sticky header with a subtle divider shadow */
+.header-sticky { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 rgba(0,0,0,.06); }
+
+/* “Code” look for MID chips */
+.code-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* Softer badge look used for MIDs */
+.badge-soft {
+  background: #f8f9fc;
+  border: 1px solid #eef1f5;
+  color: #475569;
+}
+
+/* Column resizing handle */
+.th-resizable { position: relative; }
+.th-resize-handle {
+  position: absolute;
+  right: 0; top: 0;
+  width: 8px; height: 100%;
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Nicer hover */
+.table-hover tbody tr:hover { background: #f8f9fa; }
+
+/* Match header label left inset with the inputs below */
+.th-label { display: block; padding-left: .75rem; }
+
+/* Filter inputs in the header */
+.table thead input.form-control {
+  background: #fff;
+  border-color: #e9ecef;
+}
+
+/* Limit table height like before (was inline style) */
+.table-wrap { max-height: 70vh; }
