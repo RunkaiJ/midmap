@@ -11,6 +11,14 @@ function useDebounced(value, ms = 300) {
     return v;
 }
 
+function CodeChip({ children }) {
+    return (
+        <span className="badge text-bg-light border fw-normal font-monospace">
+            {children || "—"}
+        </span>
+    );
+}
+
 export default function Reports() {
     const [clients, setClients] = useState([]);
     const [branches, setBranches] = useState([]);
@@ -31,7 +39,7 @@ export default function Reports() {
     const [fZip, setFZip] = useState("");
     const [fNotes, setFNotes] = useState("");
 
-    // debounced column filters
+    // debounced filters
     const dMawb = useDebounced(fMawb);
     const dWrong = useDebounced(fWrong);
     const dCorrect = useDebounced(fCorrect);
@@ -71,7 +79,7 @@ export default function Reports() {
         };
     }, []);
 
-    // build query string
+    // query string
     const qs = useMemo(() => {
         const p = new URLSearchParams();
         if (client) p.set("client", client);
@@ -106,7 +114,7 @@ export default function Reports() {
         offset,
     ]);
 
-    // fetch data whenever qs changes
+    // fetch data
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -146,7 +154,7 @@ export default function Reports() {
             <div className="col-12">
                 <h2 className="mb-3">Reports</h2>
 
-                {/* Top filters (meta) */}
+                {/* Filters */}
                 <div className="card mb-3">
                     <div className="card-header fw-semibold">Filters</div>
                     <div className="card-body">
@@ -217,10 +225,21 @@ export default function Reports() {
                                 />
                             </div>
                         </div>
+                    </div>
+                </div>
 
-                        <div className="d-flex gap-2 mt-3">
+                {err && <div className="alert alert-danger">{err}</div>}
+
+                {/* Results */}
+                <div className="card">
+                    <div className="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
+                        <div className="fw-semibold">Results</div>
+                        <div className="ms-auto d-flex align-items-center gap-3 small text-muted">
+                            <span>{total} total</span>
+                            <span>showing {rows.length}</span>
+                            <span>offset {offset}</span>
                             <a
-                                className="btn btn-outline-success"
+                                className="btn btn-sm btn-outline-success"
                                 href={`${API}/reports/table.xlsx?${qs}`}
                                 target="_blank"
                                 rel="noreferrer"
@@ -229,22 +248,11 @@ export default function Reports() {
                             </a>
                         </div>
                     </div>
-                </div>
 
-                {err && <div className="alert alert-danger">{err}</div>}
-
-                {/* Results */}
-                <div className="card">
-                    <div className="card-header d-flex justify-content-between align-items-center">
-                        <span className="fw-semibold">Results</span>
-                        <span className="text-muted small">
-                            {total} total • showing {rows.length} • offset{" "}
-                            {offset}
-                        </span>
-                    </div>
                     <div className="card-body p-0">
                         <ResultsTable
                             rows={rows}
+                            loading={loading}
                             filters={{
                                 fMawb,
                                 setFMawb,
@@ -264,9 +272,9 @@ export default function Reports() {
                                 setFNotes,
                                 setOffset,
                             }}
-                            loading={loading}
                         />
                     </div>
+
                     <div className="d-flex justify-content-between align-items-center p-3 border-top">
                         <button
                             className="btn btn-outline-secondary btn-sm"
@@ -313,132 +321,167 @@ function ResultsTable({ rows, filters, loading }) {
         setOffset,
     } = filters;
 
-    const onFilterChange = (setter) => (e) => {
+    const onChange = (setter) => (e) => {
         setter(e.target.value);
         setOffset(0);
     };
 
     return (
         <div className="table-responsive" style={{ maxHeight: "70vh" }}>
-            <table className="table table-sm align-middle mb-0">
+            <table className="table table-sm table-striped table-hover align-middle mb-0">
                 <thead
                     className="table-light"
                     style={{ position: "sticky", top: 0, zIndex: 1 }}
                 >
                     <tr className="align-middle">
-                        <th style={{ whiteSpace: "nowrap" }}>MAWB</th>
-                        <th>Wrong MID</th>
-                        <th>Correct MID</th>
-                        <th>Name</th>
-                        <th>Address</th>
-                        <th>City</th>
-                        <th>Zipcode</th>
-                        <th>Notes</th>
+                        <th style={{ whiteSpace: "nowrap", width: 160 }}>
+                            MAWB
+                        </th>
+                        <th style={{ width: 180 }}>Wrong MID</th>
+                        <th style={{ width: 180 }}>Correct MID</th>
+                        <th style={{ minWidth: 260 }}>Name</th>
+                        <th style={{ minWidth: 480 }}>Address</th>
+                        <th style={{ minWidth: 160 }}>City</th>
+                        <th style={{ width: 120 }}>Zipcode</th>
+                        <th style={{ minWidth: 200 }}>Notes</th>
                     </tr>
-                    {/* filter row */}
                     <tr>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fMawb}
-                                onChange={onFilterChange(setFMawb)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="MAWB"
+                                    value={fMawb}
+                                    onChange={onChange(setFMawb)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fWrong}
-                                onChange={onFilterChange(setFWrong)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="Wrong MID"
+                                    value={fWrong}
+                                    onChange={onChange(setFWrong)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fCorrect}
-                                onChange={onFilterChange(setFCorrect)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="Correct MID"
+                                    value={fCorrect}
+                                    onChange={onChange(setFCorrect)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fName}
-                                onChange={onFilterChange(setFName)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="Name"
+                                    value={fName}
+                                    onChange={onChange(setFName)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fAddress}
-                                onChange={onFilterChange(setFAddress)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="Address"
+                                    value={fAddress}
+                                    onChange={onChange(setFAddress)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fCity}
-                                onChange={onFilterChange(setFCity)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="City"
+                                    value={fCity}
+                                    onChange={onChange(setFCity)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fZip}
-                                onChange={onFilterChange(setFZip)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="Zipcode"
+                                    value={fZip}
+                                    onChange={onChange(setFZip)}
+                                />
+                            </div>
                         </th>
                         <th>
-                            <input
-                                className="form-control form-control-sm"
-                                placeholder="search…"
-                                value={fNotes}
-                                onChange={onFilterChange(setFNotes)}
-                            />
+                            <div className="input-group input-group-sm">
+                                <span className="input-group-text">🔎</span>
+                                <input
+                                    className="form-control"
+                                    placeholder="Notes"
+                                    value={fNotes}
+                                    onChange={onChange(setFNotes)}
+                                />
+                            </div>
                         </th>
                     </tr>
                 </thead>
+
                 <tbody className="table-group-divider">
                     {loading && (
                         <tr>
-                            <td colSpan={8} className="text-center py-4">
+                            <td colSpan={8} className="text-center py-5">
+                                <div
+                                    className="spinner-border spinner-border-sm me-2"
+                                    role="status"
+                                ></div>
                                 Loading…
                             </td>
                         </tr>
                     )}
+
                     {!loading && rows.length === 0 && (
                         <tr>
                             <td
                                 colSpan={8}
-                                className="text-center py-4 text-muted"
+                                className="text-center py-5 text-muted"
                             >
-                                No data.
+                                No data. Adjust filters to broaden your search.
                             </td>
                         </tr>
                     )}
+
                     {!loading &&
                         rows.map((r, i) => (
-                            <tr key={i} className={i % 2 ? "table-light" : ""}>
+                            <tr key={i}>
                                 <td>
-                                    <code>{r.mawb || "—"}</code>
+                                    <CodeChip>{r.mawb}</CodeChip>
                                 </td>
                                 <td>
-                                    <code>{r.wrong_mid || "—"}</code>
+                                    <CodeChip>{r.wrong_mid}</CodeChip>
                                 </td>
                                 <td>
-                                    <code>{r.correct_mid || "—"}</code>
+                                    <CodeChip>{r.correct_mid}</CodeChip>
+                                    {r.note ? (
+                                        <span className="ms-2 badge rounded-pill text-bg-warning-subtle border">
+                                            review
+                                        </span>
+                                    ) : null}
                                 </td>
-                                <td>{r.name || ""}</td>
+                                <td className="fw-semibold">{r.name || ""}</td>
                                 <td
-                                    style={{
-                                        maxWidth: 520,
-                                        whiteSpace: "normal",
-                                    }}
+                                    className="text-body"
+                                    style={{ whiteSpace: "normal" }}
                                 >
                                     {r.address || ""}
                                 </td>
