@@ -35,7 +35,18 @@
 .table-hover tbody tr:hover { background: #f8f9fa; }
 
 /* Match header label left inset with the inputs below */
-.th-label { display: block; padding-left: .75rem; }
+/* Match the start of input text (0.5rem th padding + 1px border + .75rem input padding) */
+.th-label {
+  display: block;
+  padding-left: calc(.75rem + 1px); /* <-- precise alignment */
+  line-height: 1.25rem;             /* keeps it visually centered */
+}
+
+/* Give the label a bit of room from the resize grabber */
+.th-resizable > .d-flex {
+  padding-right: 8px;
+}
+
 
 /* Filter inputs in the header */
 .table thead input.form-control {
