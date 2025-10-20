@@ -358,73 +358,111 @@ router.get("/table", async (req, res) => {
 
 const ExcelJS = require("exceljs");
 
-// --- Excel export ------------------------------------------------------------
 router.get("/table.xlsx", async (req, res) => {
-      const db = req.app.get("pg");
+    const db = req.app.get("pg");
 
-      const baseFilters = buildFilters(req.query);
+    const baseFilters = buildFilters(req.query);
 
-      const cte = `
-        WITH base AS ( ... ${baseFilters.sql} ... ),
-        aliasmap AS ( ... ),
-        logged   AS ( ... ),
-        chosen   AS ( ... ),
-        rows AS (
-        SELECT
-            ch.mawb,
-            ch.bad_mid                              AS wrong_mid,
-            cm.good_mid                             AS correct_mid,
-            cm.manufacturer_name                    AS name,
-            COALESCE(cm.address, '')                AS address,
-            COALESCE(cm.city, '')                   AS city,
-            COALESCE(cm.zipcode, '')                AS zipcode,
-            ch.note
-        FROM chosen ch
-        LEFT JOIN midmap.canonical_manufacturers cm
-            ON cm.id = ch.chosen_canon_id
-        )
-    `;
+    const cte = `
+    WITH base AS (
+      SELECT
+        cl.arrival_date::date                AS arrival_date,
+        cl.client_name,
+        COALESCE(b.station, cl.actor_branch) AS branch,
+        (cl.airline_3d || '-' || cl.master_bill_no) AS mawb,
+        cl.bad_mid,
+        NULLIF(TRIM(cl.good_mid), '')        AS logged_good_mid
+      FROM midmap.change_log cl
+      LEFT JOIN midmap.branches b
+        ON b.port_code = cl.arrival_airport
+      ${baseFilters.sql}
+    ),
+    aliasmap AS (
+      SELECT ma.bad_mid, cm.id AS alias_canon_id, cm.good_mid AS alias_good_mid
+      FROM midmap.mid_aliases ma
+      JOIN midmap.canonical_manufacturers cm ON cm.id = ma.good_manufacturer_id
+    ),
+    logged AS (
+      SELECT cm.good_mid, cm.id AS logged_canon_id
+      FROM midmap.canonical_manufacturers cm
+    ),
+    chosen AS (
+      SELECT
+        ba.mawb, ba.bad_mid, ba.logged_good_mid,
+        am.alias_canon_id, am.alias_good_mid,
+        lg.logged_canon_id,
+        CASE
+          WHEN am.alias_canon_id IS NOT NULL
+               AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
+          THEN am.alias_canon_id
+          WHEN lg.logged_canon_id IS NOT NULL THEN lg.logged_canon_id
+          ELSE am.alias_canon_id
+        END AS chosen_canon_id,
+        CASE
+          WHEN am.alias_canon_id IS NOT NULL
+               AND (lg.logged_canon_id IS NULL OR am.alias_canon_id <> lg.logged_canon_id)
+          THEN 'a more accurate replacement would be ' || am.alias_good_mid
+          WHEN lg.logged_canon_id IS NULL AND am.alias_canon_id IS NULL
+          THEN 'no canonical found'
+          ELSE ''
+        END AS note
+      FROM base ba
+      LEFT JOIN aliasmap am ON am.bad_mid = ba.bad_mid
+      LEFT JOIN logged   lg ON lg.good_mid = ba.logged_good_mid
+    ),
+    rows AS (
+      SELECT
+        ch.mawb,
+        ch.bad_mid                      AS wrong_mid,
+        cm.good_mid                     AS correct_mid,
+        cm.manufacturer_name            AS name,
+        COALESCE(cm.address, '')        AS address,
+        COALESCE(cm.city, '')           AS city,
+        COALESCE(cm.zipcode, '')        AS zipcode,
+        ch.note
+      FROM chosen ch
+      LEFT JOIN midmap.canonical_manufacturers cm
+        ON cm.id = ch.chosen_canon_id
+    )
+  `;
 
-      const colFilter = buildColumnFilters(
-          req.query,
-          baseFilters.params.length + 1
-      );
+    const colFilter = buildColumnFilters(
+        req.query,
+        baseFilters.params.length + 1
+    );
 
-      const sql = `
-        ${cte}
-        SELECT mawb, wrong_mid, correct_mid, name, address, city, zipcode, note
-        FROM rows
-        WHERE 1=1 ${colFilter.sql}
-        ORDER BY mawb, wrong_mid;
-    `;
+    const sql = `
+    ${cte}
+    SELECT mawb, wrong_mid, correct_mid, name, address, city, zipcode, note
+    FROM rows
+    WHERE 1=1 ${colFilter.sql}
+    ORDER BY mawb, wrong_mid;
+  `;
 
     try {
-        const rows = await db.query(cte, params).then((r) => r.rows);
+        const dataParams = [...baseFilters.params, ...colFilter.params];
+        const rows = await db.query(sql, dataParams).then((r) => r.rows);
 
         const wb = new ExcelJS.Workbook();
         const ws = wb.addWorksheet("Report");
 
-        // Header
         ws.columns = [
             { header: "MAWB", key: "mawb", width: 24 },
             { header: "Wrong MID", key: "wrong_mid", width: 22 },
             { header: "Correct MID", key: "correct_mid", width: 22 },
             { header: "Name", key: "name", width: 40 },
-            { header: "Address", key: "address", width: 50 },
+            { header: "Address", key: "address", width: 60 },
             { header: "City", key: "city", width: 18 },
             { header: "Zipcode", key: "zipcode", width: 12 },
             { header: "Notes", key: "note", width: 40 },
         ];
 
-        // Data
-        for (const r of rows) ws.addRow(r);
-
-        // Simple styling for header row
+        rows.forEach((r) => ws.addRow(r));
         const header = ws.getRow(1);
         header.font = { bold: true };
         header.alignment = { vertical: "middle" };
+        ws.views = [{ state: "frozen", ySplit: 1 }];
 
-        // Response headers
         res.setHeader(
             "Content-Disposition",
             `attachment; filename="midmap_report_${Date.now()}.xlsx"`

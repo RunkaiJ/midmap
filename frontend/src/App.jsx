@@ -3,7 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import NavBar from "./components/NavBar.jsx";
 import FixMids from "./pages/FixMids.jsx";
 import AddMids from "./pages/AddMids.jsx";
-import Reports from "./pages/Reports.jsx"; // ← add
+import Reports from "./pages/Reports.jsx"; 
 
 export default function App() {
     return (

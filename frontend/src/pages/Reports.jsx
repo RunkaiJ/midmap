@@ -143,7 +143,7 @@ export default function Reports() {
 
     return (
         <div className="row">
-            <div className="col-xl-11 col-lg-12">
+            <div className="col-12">
                 <h2 className="mb-3">Reports</h2>
 
                 {/* Top filters (meta) */}
@@ -319,7 +319,7 @@ function ResultsTable({ rows, filters, loading }) {
     };
 
     return (
-        <div className="table-responsive">
+        <div className="table-responsive" style={{ maxHeight: "70vh" }}>
             <table className="table table-sm align-middle mb-0">
                 <thead
                     className="table-light"
