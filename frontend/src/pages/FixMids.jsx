@@ -245,7 +245,6 @@ export default function FixMids() {
                 rows,
                 branch,
                 person,
-                // house_awb removed per request
             }),
         }).catch(() => {}); // non-blocking
     }
@@ -325,7 +324,7 @@ export default function FixMids() {
                     'Could not find "House AWB" column in this file.'
                 );
 
-            // unique (bad_mid, manufacturer_name)
+            // build unique (bad_mid, manufacturer_name)
             const uniqKey = (b, n) =>
                 `${(b || "").trim()}||${(n || "").trim()}`;
             const uniquePairs = new Map();
@@ -392,25 +391,25 @@ export default function FixMids() {
                         bad_mid,
                         good_mid: hit.good_mid,
                         method: hit.method, // "alias" or "name"
-                        // houseAwb intentionally NOT included per request
                     });
                 }
             });
 
-            // fill empty House AWB cells with Master Bill Number
-            if (idx.house !== -1 && idx.bill !== -1) {
+            // FORCE every row's House AWB cell to match the confirmed houseAwb.
+            // If for some reason houseAwb is still blank (shouldn't happen because we require it),
+            // we fall back to Master Bill Number like before.
+            if (idx.house !== -1) {
                 const houseCol = idx.house;
                 rows.forEach((r, i) => {
-                    const houseVal = (r[header[houseCol]] ?? "")
-                        .toString()
-                        .trim();
-                    if (!houseVal) {
-                        const bill = (r[header[idx.bill]] ?? "")
+                    let valueToWrite = houseAwb;
+                    if (!valueToWrite && idx.bill !== -1) {
+                        // fallback: bill
+                        valueToWrite = (r[header[idx.bill]] ?? "")
                             .toString()
                             .trim();
-                        if (bill) {
-                            writeTextCell(ws, houseCol, i + 2, bill);
-                        }
+                    }
+                    if (valueToWrite) {
+                        writeTextCell(ws, houseCol, i + 2, valueToWrite);
                     }
                 });
             }
@@ -483,8 +482,10 @@ export default function FixMids() {
                         const htsKey = header[idx.hts];
                         rows.forEach((r, i) => {
                             const raw = r[htsKey];
-                            if (raw == null) return;
-                            const fixed = normMap.get(norm(raw));
+                            const fixed =
+                                raw == null
+                                    ? undefined
+                                    : normMap.get(norm(raw));
                             if (fixed && fixed !== raw) {
                                 writeTextCell(ws, idx.hts, i + 2, fixed);
                                 r[htsKey] = fixed;
@@ -494,7 +495,7 @@ export default function FixMids() {
                 }
             }
 
-            // log changes (no houseAwb)
+            // log changes
             await logChanges(changeRows);
 
             // compact log for download
