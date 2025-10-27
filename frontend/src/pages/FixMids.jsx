@@ -11,6 +11,7 @@ const MODES = {
 
 const API = import.meta.env.VITE_API_BASE;
 
+// helper to write text cells back into worksheet
 const writeTextCell = (ws, colIndex, row1Based, text) => {
     const addr = XLSX.utils.encode_cell({ c: colIndex, r: row1Based - 1 });
     ws[addr] = { t: "s", v: text };
@@ -24,6 +25,7 @@ function trimTrailingEmpty(ws) {
         R1 = range.e.r,
         C1 = range.e.c;
 
+    // trim empty rows bottom
     while (R1 >= R0) {
         let hasData = false;
         for (let c = C0; c <= C1; c++) {
@@ -34,11 +36,13 @@ function trimTrailingEmpty(ws) {
             }
         }
         if (hasData) break;
-        for (let c = C0; c <= C1; c++)
+        for (let c = C0; c <= C1; c++) {
             delete ws[XLSX.utils.encode_cell({ r: R1, c })];
+        }
         R1--;
     }
 
+    // trim empty cols right
     while (C1 >= C0) {
         let hasData = false;
         for (let r = R0; r <= R1; r++) {
@@ -49,8 +53,9 @@ function trimTrailingEmpty(ws) {
             }
         }
         if (hasData) break;
-        for (let r = R0; r <= R1; r++)
+        for (let r = R0; r <= R1; r++) {
             delete ws[XLSX.utils.encode_cell({ r, c: C1 })];
+        }
         C1--;
     }
 
@@ -60,6 +65,7 @@ function trimTrailingEmpty(ws) {
     });
 }
 
+// format numeric Excel date serials to m/d/yyyy in specified columns
 function fmtDateCols(ws, ...colIdx) {
     const rng = XLSX.utils.decode_range(ws["!ref"]);
     for (const c of colIdx) {
@@ -86,27 +92,24 @@ const isValidXlsx = (f) => {
 export default function FixMids() {
     const [file, setFile] = useState(null);
 
-    // branch/person
+    // Branch / person (required)
     const [branches, setBranches] = useState([]);
     const [branch, setBranch] = useState("");
     const [person, setPerson] = useState("");
 
-    // House AWB:
-    // detectedHouseHeader: what we auto-found in the file
-    // houseHeader: manual override (user input)
-    const [detectedHouseHeader, setDetectedHouseHeader] = useState("");
-    const [houseHeader, setHouseHeader] = useState("");
+    // House AWB value (e.g. "36749974")
+    const [houseAwb, setHouseAwb] = useState("");
 
     const [status, setStatus] = useState(null);
     const [changesJson, setChangesJson] = useState("");
     const [busy, setBusy] = useState(false);
 
-    // boohoo bits
+    // Boohoo bits
     const [mode, setMode] = useState(MODES.SHEIN);
-    const [airlineInput, setAirlineInput] = useState("");
-    const [htsMap, setHtsMap] = useState({});
+    const [airlineInput, setAirlineInput] = useState(""); // hybrid only
+    const [htsMap, setHtsMap] = useState({}); // future use
 
-    // HTS map fetch
+    // grab HTS map for boohoo if needed
     useEffect(() => {
         let cancelled = false;
         if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
@@ -128,7 +131,7 @@ export default function FixMids() {
         };
     }, [mode]);
 
-    // branches fetch
+    // load branches for select
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -147,6 +150,11 @@ export default function FixMids() {
         };
     }, []);
 
+    // when user picks a file:
+    // - validate .xlsx
+    // - load first sheet header/rows
+    // - find "House AWB"/"HAWB"/"HouseAWB"
+    // - grab first non-empty cell under that column and set houseAwb
     const onFile = async (e) => {
         const f = e.target.files?.[0] || null;
         if (f && !isValidXlsx(f)) {
@@ -155,37 +163,65 @@ export default function FixMids() {
                 text: "Please select a .xlsx Excel file.",
             });
             setFile(null);
-            setDetectedHouseHeader("");
-            setHouseHeader("");
+            setHouseAwb("");
             return;
         }
+
         setFile(f);
         setStatus(null);
         setChangesJson("");
+        setHouseAwb("");
 
-        // try to auto-detect a "House AWB"-ish column name
+        if (!f) return;
+
         try {
             const buf = await f.arrayBuffer();
             const wb = XLSX.read(buf, { type: "array" });
             const wsName = wb.SheetNames[0];
             const ws = wb.Sheets[wsName];
-            const header =
+
+            // parse headers
+            const headerRow =
                 XLSX.utils
                     .sheet_to_json(ws, { header: 1 })
                     .at(0)
                     ?.map((h) => (h ?? "").toString().trim()) || [];
 
-            const found = header.find((h) =>
-                h.toLowerCase().includes("house awb")
-            );
+            // helper: find index of a header by label(s)
+            const findIdx = (labels) => {
+                const lower = headerRow.map((h) => h.toLowerCase());
+                for (const lab of labels) {
+                    const i = lower.indexOf(lab.toLowerCase());
+                    if (i !== -1) return i;
+                }
+                return -1;
+            };
 
-            setDetectedHouseHeader(found || "");
-            // IMPORTANT: we do NOT setHouseHeader(found)
-            // This keeps the visible input blank unless user wants to override.
-            setHouseHeader("");
-        } catch {
-            setDetectedHouseHeader("");
-            setHouseHeader("");
+            // which column is House AWB?
+            const houseColIdx = findIdx(["House AWB", "HAWB", "HouseAWB"]);
+
+            if (houseColIdx !== -1) {
+                // walk downward from row 2 until we hit a non-empty value
+                const range = XLSX.utils.decode_range(ws["!ref"]);
+                for (let r = 1; r <= range.e.r; r++) {
+                    const cellAddr = XLSX.utils.encode_cell({
+                        r,
+                        c: houseColIdx,
+                    });
+                    const cell = ws[cellAddr];
+                    if (
+                        cell &&
+                        cell.v != null &&
+                        String(cell.v).trim() !== ""
+                    ) {
+                        setHouseAwb(String(cell.v).trim());
+                        break;
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Failed to sniff House AWB:", err);
+            // leave houseAwb as ""
         }
     };
 
@@ -197,7 +233,7 @@ export default function FixMids() {
         });
         if (!res.ok) throw new Error(await res.text());
         const { results } = await res.json();
-        return results;
+        return results; // [{bad_mid, manufacturer_name, good_mid, method}]
     }
 
     async function logChanges(rows) {
@@ -205,8 +241,13 @@ export default function FixMids() {
         await fetch(`${API}/log/changes`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rows, branch, person }),
-        }).catch(() => {});
+            body: JSON.stringify({
+                rows,
+                branch,
+                person,
+                // house_awb removed per request
+            }),
+        }).catch(() => {}); // non-blocking
     }
 
     const processAndDownload = async (e) => {
@@ -217,19 +258,16 @@ export default function FixMids() {
                 text: "Choose a .xlsx file.",
             });
 
-        // require branch/person
         if (!branch || !person)
             return setStatus({
                 type: "warning",
                 text: "Please select a Branch and enter your name.",
             });
 
-        // require either detected header or manual override
-        const effectiveHouseHeader = houseHeader || detectedHouseHeader;
-        if (!effectiveHouseHeader)
+        if (!houseAwb)
             return setStatus({
                 type: "warning",
-                text: "House AWB column is required. Either upload a file that has it or type the header name.",
+                text: "House AWB (required) is empty. Please enter it.",
             });
 
         setBusy(true);
@@ -237,7 +275,7 @@ export default function FixMids() {
         setChangesJson("");
 
         try {
-            // read workbook
+            // read workbook for processing
             const buf = await file.arrayBuffer();
             const wb = XLSX.read(buf, { type: "array" });
             const wsName = wb.SheetNames[0];
@@ -271,7 +309,7 @@ export default function FixMids() {
                 arrivalDate: findIdx(["Arrival Date", "ArrivalDate"]),
                 name: findIdx(["ManufacturerName", "Manufacturer Name"]),
                 mid: findIdx(["ManufacturerCode", "Manufacturer Code"]),
-                house: findIdx([effectiveHouseHeader]),
+                house: findIdx(["House AWB", "HAWB", "HouseAWB"]),
                 fda: findIdx(["FDAPRODUCTCODE"]),
                 hts: findIdx(["HTS"]),
             };
@@ -284,10 +322,10 @@ export default function FixMids() {
                 );
             if (idx.house === -1)
                 throw new Error(
-                    `Could not find a column named "${effectiveHouseHeader}".`
+                    'Could not find "House AWB" column in this file.'
                 );
 
-            // unique bad_mid/manufacturer_name
+            // unique (bad_mid, manufacturer_name)
             const uniqKey = (b, n) =>
                 `${(b || "").trim()}||${(n || "").trim()}`;
             const uniquePairs = new Map();
@@ -312,7 +350,7 @@ export default function FixMids() {
                 ])
             );
 
-            // apply replacements / collect logs
+            // apply replacements / collect audit rows
             const colLetter = XLSX.utils.encode_col(idx.mid);
             const counts = new Map();
             const changeRows = [];
@@ -324,8 +362,9 @@ export default function FixMids() {
                         ? ""
                         : (r[header[idx.name]] ?? "").toString().trim();
                 const hit = resMap.get(uniqKey(bad_mid, manufacturer_name));
+
                 if (hit && hit.good_mid && hit.good_mid !== bad_mid) {
-                    const excelRow = i + 2;
+                    const excelRow = i + 2; // header row is 1
                     const addr = `${colLetter}${excelRow}`;
                     ws[addr] = { t: "s", v: hit.good_mid };
 
@@ -352,17 +391,20 @@ export default function FixMids() {
                         manufacturer_name,
                         bad_mid,
                         good_mid: hit.good_mid,
-                        method: hit.method,
+                        method: hit.method, // "alias" or "name"
+                        // houseAwb intentionally NOT included per request
                     });
                 }
             });
 
-            // If House AWB column is blank for a row, fill from Master Bill Number
+            // fill empty House AWB cells with Master Bill Number
             if (idx.house !== -1 && idx.bill !== -1) {
                 const houseCol = idx.house;
                 rows.forEach((r, i) => {
-                    const house = (r[header[houseCol]] ?? "").toString().trim();
-                    if (!house) {
+                    const houseVal = (r[header[houseCol]] ?? "")
+                        .toString()
+                        .trim();
+                    if (!houseVal) {
                         const bill = (r[header[idx.bill]] ?? "")
                             .toString()
                             .trim();
@@ -373,12 +415,11 @@ export default function FixMids() {
                 });
             }
 
-            // Normalize FDAPRODUCTCODE
-            const fdaIdx = idx.fda;
-            if (fdaIdx !== -1) {
-                const key = header[fdaIdx];
+            // normalize FDAPRODUCTCODE
+            if (idx.fda !== -1) {
+                const fdaKey = header[idx.fda];
                 rows.forEach((r, i) => {
-                    const raw = r[key];
+                    const raw = r[fdaKey];
                     if (raw == null) return;
                     const firstToken =
                         String(raw)
@@ -387,13 +428,13 @@ export default function FixMids() {
                             .filter(Boolean)[0] || "";
                     const normalized = firstToken.replace(/\s+/g, "");
                     if (normalized !== String(raw)) {
-                        writeTextCell(ws, fdaIdx, i + 2, normalized);
-                        r[key] = normalized;
+                        writeTextCell(ws, idx.fda, i + 2, normalized);
+                        r[fdaKey] = normalized;
                     }
                 });
             }
 
-            // Boohoo extras
+            // Boohoo transforms
             if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
                 const resp = await fetch(`${API}/boohoo/transform`, {
                     method: "POST",
@@ -408,6 +449,7 @@ export default function FixMids() {
                 const { ok, patches, error } = await resp.json();
                 if (!ok) throw new Error(error || "Boohoo transform failed");
 
+                // apply backend patches
                 for (const p of patches) {
                     const colIdx = header.findIndex(
                         (h) =>
@@ -421,7 +463,7 @@ export default function FixMids() {
                     }
                 }
 
-                // HTS remap for single HTS column (if present)
+                // HTS remap for single "HTS" col
                 if (idx.hts !== -1) {
                     const mapResp = await fetch(`${API}/boohoo/hts-map`, {
                         cache: "no-store",
@@ -438,24 +480,24 @@ export default function FixMids() {
                                 String(v),
                             ])
                         );
-                        const key = header[idx.hts];
+                        const htsKey = header[idx.hts];
                         rows.forEach((r, i) => {
-                            const raw = r[key];
+                            const raw = r[htsKey];
                             if (raw == null) return;
                             const fixed = normMap.get(norm(raw));
                             if (fixed && fixed !== raw) {
                                 writeTextCell(ws, idx.hts, i + 2, fixed);
-                                r[key] = fixed;
+                                r[htsKey] = fixed;
                             }
                         });
                     }
                 }
             }
 
-            // log changes to backend
+            // log changes (no houseAwb)
             await logChanges(changeRows);
 
-            // compact change summary
+            // compact log for download
             const csvRows = Array.from(counts.entries()).map(([k, count]) => {
                 const [pair, manu] = k.split("||");
                 const [bad_mid, good_mid] = pair.split("-->");
@@ -477,7 +519,7 @@ export default function FixMids() {
                     )
                     .join("\n");
 
-            // tidy sheet + write out
+            // clean + export
             fmtDateCols(
                 ws,
                 idx.entryDate,
@@ -514,9 +556,6 @@ export default function FixMids() {
             setBusy(false);
         }
     };
-
-    const effectiveHouseHeader = houseHeader || detectedHouseHeader;
-    const needHouseHeaderInput = !detectedHouseHeader; // if we didn't auto-detect, force user input
 
     return (
         <div className="row">
@@ -634,38 +673,19 @@ export default function FixMids() {
                                 <label className="form-label">
                                     House AWB (required)
                                 </label>
-
-                                {/* User override field */}
                                 <input
                                     className="form-control"
-                                    placeholder={
-                                        detectedHouseHeader
-                                            ? detectedHouseHeader
-                                            : 'e.g. "House AWB"'
-                                    }
-                                    value={houseHeader}
+                                    placeholder="e.g. 36749974"
+                                    value={houseAwb}
                                     onChange={(e) =>
-                                        setHouseHeader(e.target.value)
+                                        setHouseAwb(e.target.value)
                                     }
-                                    // required only if we didn't detect automatically
-                                    required={needHouseHeaderInput}
+                                    required
                                 />
-
-                                {detectedHouseHeader && (
-                                    <div className="form-text">
-                                        Detected column:{" "}
-                                        <code>{detectedHouseHeader}</code>
-                                        {houseHeader
-                                            ? " (override in use)"
-                                            : " (will use this)"}
-                                    </div>
-                                )}
-
-                                {!detectedHouseHeader && (
-                                    <div className="form-text">
-                                        Type the exact header name from Excel.
-                                    </div>
-                                )}
+                                <div className="form-text">
+                                    We'll fill this automatically from the file
+                                    if possible. You can edit it.
+                                </div>
                             </div>
                         </div>
 
@@ -677,12 +697,11 @@ export default function FixMids() {
                                     busy ||
                                     !branch ||
                                     !person ||
-                                    (!effectiveHouseHeader && true)
+                                    !houseAwb
                                 }
                             >
                                 {busy ? "Processing…" : "Process & Download"}
                             </button>
-
                             <button
                                 className="btn btn-outline-secondary"
                                 type="button"
@@ -691,8 +710,7 @@ export default function FixMids() {
                                     setStatus(null);
                                     setChangesJson("");
                                     setBusy(false);
-                                    setDetectedHouseHeader("");
-                                    setHouseHeader("");
+                                    setHouseAwb("");
                                 }}
                                 disabled={busy}
                             >
