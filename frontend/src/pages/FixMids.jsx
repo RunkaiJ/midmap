@@ -85,18 +85,28 @@ const isValidXlsx = (f) => {
 
 export default function FixMids() {
     const [file, setFile] = useState(null);
+
+    // branch/person
     const [branches, setBranches] = useState([]);
     const [branch, setBranch] = useState("");
     const [person, setPerson] = useState("");
+
+    // House AWB:
+    // detectedHouseHeader: what we auto-found in the file
+    // houseHeader: manual override (user input)
+    const [detectedHouseHeader, setDetectedHouseHeader] = useState("");
     const [houseHeader, setHouseHeader] = useState("");
+
     const [status, setStatus] = useState(null);
     const [changesJson, setChangesJson] = useState("");
     const [busy, setBusy] = useState(false);
 
+    // boohoo bits
     const [mode, setMode] = useState(MODES.SHEIN);
     const [airlineInput, setAirlineInput] = useState("");
     const [htsMap, setHtsMap] = useState({});
 
+    // HTS map fetch
     useEffect(() => {
         let cancelled = false;
         if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
@@ -118,6 +128,7 @@ export default function FixMids() {
         };
     }, [mode]);
 
+    // branches fetch
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -144,13 +155,15 @@ export default function FixMids() {
                 text: "Please select a .xlsx Excel file.",
             });
             setFile(null);
+            setDetectedHouseHeader("");
+            setHouseHeader("");
             return;
         }
         setFile(f);
         setStatus(null);
         setChangesJson("");
 
-        // auto-detect "House AWB" column name
+        // try to auto-detect a "House AWB"-ish column name
         try {
             const buf = await f.arrayBuffer();
             const wb = XLSX.read(buf, { type: "array" });
@@ -161,11 +174,17 @@ export default function FixMids() {
                     .sheet_to_json(ws, { header: 1 })
                     .at(0)
                     ?.map((h) => (h ?? "").toString().trim()) || [];
+
             const found = header.find((h) =>
                 h.toLowerCase().includes("house awb")
             );
-            setHouseHeader(found || "");
+
+            setDetectedHouseHeader(found || "");
+            // IMPORTANT: we do NOT setHouseHeader(found)
+            // This keeps the visible input blank unless user wants to override.
+            setHouseHeader("");
         } catch {
+            setDetectedHouseHeader("");
             setHouseHeader("");
         }
     };
@@ -193,11 +212,24 @@ export default function FixMids() {
     const processAndDownload = async (e) => {
         e.preventDefault();
         if (!file)
-            return setStatus({ type: "warning", text: "Choose a .xlsx file." });
-        if (!branch || !person || !houseHeader)
             return setStatus({
                 type: "warning",
-                text: "Please select a Branch, enter your name, and fill House AWB (required).",
+                text: "Choose a .xlsx file.",
+            });
+
+        // require branch/person
+        if (!branch || !person)
+            return setStatus({
+                type: "warning",
+                text: "Please select a Branch and enter your name.",
+            });
+
+        // require either detected header or manual override
+        const effectiveHouseHeader = houseHeader || detectedHouseHeader;
+        if (!effectiveHouseHeader)
+            return setStatus({
+                type: "warning",
+                text: "House AWB column is required. Either upload a file that has it or type the header name.",
             });
 
         setBusy(true);
@@ -205,11 +237,13 @@ export default function FixMids() {
         setChangesJson("");
 
         try {
+            // read workbook
             const buf = await file.arrayBuffer();
             const wb = XLSX.read(buf, { type: "array" });
             const wsName = wb.SheetNames[0];
             const ws = wb.Sheets[wsName];
 
+            // headers + rows
             const header =
                 XLSX.utils
                     .sheet_to_json(ws, { header: 1 })
@@ -237,18 +271,240 @@ export default function FixMids() {
                 arrivalDate: findIdx(["Arrival Date", "ArrivalDate"]),
                 name: findIdx(["ManufacturerName", "Manufacturer Name"]),
                 mid: findIdx(["ManufacturerCode", "Manufacturer Code"]),
-                house: findIdx([houseHeader]),
+                house: findIdx([effectiveHouseHeader]),
                 fda: findIdx(["FDAPRODUCTCODE"]),
                 hts: findIdx(["HTS"]),
             };
 
+            if (idx.mid === -1)
+                throw new Error("Could not find ManufacturerCode column.");
+            if (idx.airline === -1 || idx.bill === -1)
+                throw new Error(
+                    "Need Airline 3 digit code and Master Bill Number columns."
+                );
             if (idx.house === -1)
                 throw new Error(
-                    `Could not find a column named "${houseHeader}".`
+                    `Could not find a column named "${effectiveHouseHeader}".`
                 );
 
-            // (rest of your existing processAndDownload logic unchanged)
-            // ...
+            // unique bad_mid/manufacturer_name
+            const uniqKey = (b, n) =>
+                `${(b || "").trim()}||${(n || "").trim()}`;
+            const uniquePairs = new Map();
+            for (const r of rows) {
+                const bad_mid = (r[header[idx.mid]] ?? "").toString().trim();
+                const manufacturer_name =
+                    idx.name === -1
+                        ? ""
+                        : (r[header[idx.name]] ?? "").toString().trim();
+                const key = uniqKey(bad_mid, manufacturer_name);
+                if (!uniquePairs.has(key))
+                    uniquePairs.set(key, { bad_mid, manufacturer_name });
+            }
+
+            const resolved = await resolvePairs(
+                Array.from(uniquePairs.values())
+            );
+            const resMap = new Map(
+                resolved.map((x) => [
+                    uniqKey(x.bad_mid, x.manufacturer_name),
+                    x,
+                ])
+            );
+
+            // apply replacements / collect logs
+            const colLetter = XLSX.utils.encode_col(idx.mid);
+            const counts = new Map();
+            const changeRows = [];
+
+            rows.forEach((r, i) => {
+                const bad_mid = (r[header[idx.mid]] ?? "").toString().trim();
+                const manufacturer_name =
+                    idx.name === -1
+                        ? ""
+                        : (r[header[idx.name]] ?? "").toString().trim();
+                const hit = resMap.get(uniqKey(bad_mid, manufacturer_name));
+                if (hit && hit.good_mid && hit.good_mid !== bad_mid) {
+                    const excelRow = i + 2;
+                    const addr = `${colLetter}${excelRow}`;
+                    ws[addr] = { t: "s", v: hit.good_mid };
+
+                    const k = `${hit.bad_mid}-->${hit.good_mid}||${manufacturer_name}`;
+                    counts.set(k, (counts.get(k) || 0) + 1);
+
+                    changeRows.push({
+                        airline_3d: (r[header[idx.airline]] ?? "")
+                            .toString()
+                            .slice(0, 3),
+                        master_bill_no: (r[header[idx.bill]] ?? "").toString(),
+                        importer_id:
+                            idx.importer === -1
+                                ? null
+                                : (r[header[idx.importer]] ?? "").toString(),
+                        arrival_airport:
+                            idx.airport === -1
+                                ? null
+                                : (r[header[idx.airport]] ?? "").toString(),
+                        arrival_date:
+                            idx.arrivalDate === -1
+                                ? null
+                                : (r[header[idx.arrivalDate]] ?? "").toString(),
+                        manufacturer_name,
+                        bad_mid,
+                        good_mid: hit.good_mid,
+                        method: hit.method,
+                    });
+                }
+            });
+
+            // If House AWB column is blank for a row, fill from Master Bill Number
+            if (idx.house !== -1 && idx.bill !== -1) {
+                const houseCol = idx.house;
+                rows.forEach((r, i) => {
+                    const house = (r[header[houseCol]] ?? "").toString().trim();
+                    if (!house) {
+                        const bill = (r[header[idx.bill]] ?? "")
+                            .toString()
+                            .trim();
+                        if (bill) {
+                            writeTextCell(ws, houseCol, i + 2, bill);
+                        }
+                    }
+                });
+            }
+
+            // Normalize FDAPRODUCTCODE
+            const fdaIdx = idx.fda;
+            if (fdaIdx !== -1) {
+                const key = header[fdaIdx];
+                rows.forEach((r, i) => {
+                    const raw = r[key];
+                    if (raw == null) return;
+                    const firstToken =
+                        String(raw)
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean)[0] || "";
+                    const normalized = firstToken.replace(/\s+/g, "");
+                    if (normalized !== String(raw)) {
+                        writeTextCell(ws, fdaIdx, i + 2, normalized);
+                        r[key] = normalized;
+                    }
+                });
+            }
+
+            // Boohoo extras
+            if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
+                const resp = await fetch(`${API}/boohoo/transform`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        mode,
+                        airline3d: airlineInput || "",
+                        rows,
+                    }),
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+                const { ok, patches, error } = await resp.json();
+                if (!ok) throw new Error(error || "Boohoo transform failed");
+
+                for (const p of patches) {
+                    const colIdx = header.findIndex(
+                        (h) =>
+                            h.trim().toLowerCase() ===
+                            String(p.col).trim().toLowerCase()
+                    );
+                    if (colIdx !== -1) {
+                        const val = p.value == null ? "" : String(p.value);
+                        writeTextCell(ws, colIdx, p.row + 2, val);
+                        rows[p.row][header[colIdx]] = val;
+                    }
+                }
+
+                // HTS remap for single HTS column (if present)
+                if (idx.hts !== -1) {
+                    const mapResp = await fetch(`${API}/boohoo/hts-map`, {
+                        cache: "no-store",
+                    });
+                    if (mapResp.ok) {
+                        const { map: rawMap = {} } = await mapResp.json();
+                        const norm = (s) =>
+                            String(s ?? "")
+                                .replace(/[^0-9A-Za-z]/g, "")
+                                .toUpperCase();
+                        const normMap = new Map(
+                            Object.entries(rawMap).map(([k, v]) => [
+                                norm(k),
+                                String(v),
+                            ])
+                        );
+                        const key = header[idx.hts];
+                        rows.forEach((r, i) => {
+                            const raw = r[key];
+                            if (raw == null) return;
+                            const fixed = normMap.get(norm(raw));
+                            if (fixed && fixed !== raw) {
+                                writeTextCell(ws, idx.hts, i + 2, fixed);
+                                r[key] = fixed;
+                            }
+                        });
+                    }
+                }
+            }
+
+            // log changes to backend
+            await logChanges(changeRows);
+
+            // compact change summary
+            const csvRows = Array.from(counts.entries()).map(([k, count]) => {
+                const [pair, manu] = k.split("||");
+                const [bad_mid, good_mid] = pair.split("-->");
+                return {
+                    bad_mid,
+                    good_mid,
+                    manufacturer_name: manu || "",
+                    count,
+                };
+            });
+            const logCsv =
+                "bad_mid,good_mid,manufacturer_name,count\n" +
+                csvRows
+                    .map(
+                        (c) =>
+                            `${csvEsc(c.bad_mid)},${csvEsc(
+                                c.good_mid
+                            )},${csvEsc(c.manufacturer_name)},${c.count}`
+                    )
+                    .join("\n");
+
+            // tidy sheet + write out
+            fmtDateCols(
+                ws,
+                idx.entryDate,
+                idx.importDate,
+                idx.exportDate,
+                idx.arrivalDate
+            );
+            trimTrailingEmpty(ws);
+
+            const outBuf = XLSX.write(wb, {
+                type: "array",
+                bookType: "xlsx",
+                compression: true,
+                bookSST: true,
+            });
+
+            const zip = new JSZip();
+            zip.file(`results_${file.name}`, outBuf);
+            zip.file(`log_${file.name.replace(/\.xlsx$/i, "")}.csv`, logCsv);
+            const blob = await zip.generateAsync({ type: "blob" });
+            saveAs(blob, `midmap_${file.name.replace(/\.xlsx$/i, "")}.zip`);
+
+            setStatus({
+                type: "success",
+                text: `Done. ${csvRows.length} unique MID change(s). ZIP downloaded.`,
+            });
+            setChangesJson(JSON.stringify(csvRows, null, 2));
         } catch (err) {
             setStatus({
                 type: "danger",
@@ -258,6 +514,9 @@ export default function FixMids() {
             setBusy(false);
         }
     };
+
+    const effectiveHouseHeader = houseHeader || detectedHouseHeader;
+    const needHouseHeaderInput = !detectedHouseHeader; // if we didn't auto-detect, force user input
 
     return (
         <div className="row">
@@ -308,6 +567,7 @@ export default function FixMids() {
                                     </option>
                                 </select>
                             </div>
+
                             {mode === MODES.BOOHOO_HYBRID && (
                                 <div className="col-md-6">
                                     <label className="form-label">
@@ -337,21 +597,26 @@ export default function FixMids() {
                                     required
                                 >
                                     <option value="">Select…</option>
-                                    {branches.map((b) => (
-                                        <option
-                                            key={b.station}
-                                            value={b.station}
-                                        >
-                                            {b.label ||
-                                                `${b.station}${
-                                                    b.port_code
-                                                        ? ` | ${b.port_code}`
-                                                        : ""
-                                                }`}
-                                        </option>
-                                    ))}
+                                    {branches.map((b) => {
+                                        const label =
+                                            b.label ||
+                                            `${b.station}${
+                                                b.port_code
+                                                    ? ` | ${b.port_code}`
+                                                    : ""
+                                            }`;
+                                        return (
+                                            <option
+                                                key={b.station}
+                                                value={b.station}
+                                            >
+                                                {label}
+                                            </option>
+                                        );
+                                    })}
                                 </select>
                             </div>
+
                             <div className="col-md-6">
                                 <label className="form-label">
                                     Person (required)
@@ -364,19 +629,43 @@ export default function FixMids() {
                                     required
                                 />
                             </div>
+
                             <div className="col-md-6">
                                 <label className="form-label">
                                     House AWB (required)
                                 </label>
+
+                                {/* User override field */}
                                 <input
                                     className="form-control"
-                                    placeholder='e.g. "House AWB"'
+                                    placeholder={
+                                        detectedHouseHeader
+                                            ? detectedHouseHeader
+                                            : 'e.g. "House AWB"'
+                                    }
                                     value={houseHeader}
                                     onChange={(e) =>
                                         setHouseHeader(e.target.value)
                                     }
-                                    required
+                                    // required only if we didn't detect automatically
+                                    required={needHouseHeaderInput}
                                 />
+
+                                {detectedHouseHeader && (
+                                    <div className="form-text">
+                                        Detected column:{" "}
+                                        <code>{detectedHouseHeader}</code>
+                                        {houseHeader
+                                            ? " (override in use)"
+                                            : " (will use this)"}
+                                    </div>
+                                )}
+
+                                {!detectedHouseHeader && (
+                                    <div className="form-text">
+                                        Type the exact header name from Excel.
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -388,11 +677,12 @@ export default function FixMids() {
                                     busy ||
                                     !branch ||
                                     !person ||
-                                    !houseHeader
+                                    (!effectiveHouseHeader && true)
                                 }
                             >
                                 {busy ? "Processing…" : "Process & Download"}
                             </button>
+
                             <button
                                 className="btn btn-outline-secondary"
                                 type="button"
@@ -401,6 +691,7 @@ export default function FixMids() {
                                     setStatus(null);
                                     setChangesJson("");
                                     setBusy(false);
+                                    setDetectedHouseHeader("");
                                     setHouseHeader("");
                                 }}
                                 disabled={busy}
