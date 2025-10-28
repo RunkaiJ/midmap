@@ -97,7 +97,7 @@ export default function FixMids() {
     const [branch, setBranch] = useState("");
     const [person, setPerson] = useState("");
 
-    // House AWB value (e.g. "36749974")
+    // House AWB value (used only for SHEIN mode)
     const [houseAwb, setHouseAwb] = useState("");
 
     const [status, setStatus] = useState(null);
@@ -155,6 +155,7 @@ export default function FixMids() {
     // - load first sheet header/rows
     // - find "House AWB"/"HAWB"/"HouseAWB"
     // - grab first non-empty cell under that column and set houseAwb
+    //   BUT ONLY if mode is SHEIN (other modes don't care / don't show it)
     const onFile = async (e) => {
         const f = e.target.files?.[0] || null;
         if (f && !isValidXlsx(f)) {
@@ -170,7 +171,11 @@ export default function FixMids() {
         setFile(f);
         setStatus(null);
         setChangesJson("");
-        setHouseAwb("");
+
+        // reset only if SHEIN, because boohoo doesn't use it
+        if (mode === MODES.SHEIN) {
+            setHouseAwb("");
+        }
 
         if (!f) return;
 
@@ -197,31 +202,38 @@ export default function FixMids() {
                 return -1;
             };
 
-            // which column is House AWB?
-            const houseColIdx = findIdx(["House AWB", "HAWB", "HouseAWB"]);
+            if (mode === MODES.SHEIN) {
+                // which column is House AWB?
+                const houseColIdx = findIdx(["House AWB", "HAWB", "HouseAWB"]);
 
-            if (houseColIdx !== -1) {
-                // walk downward from row 2 until we hit a non-empty value
-                const range = XLSX.utils.decode_range(ws["!ref"]);
-                for (let r = 1; r <= range.e.r; r++) {
-                    const cellAddr = XLSX.utils.encode_cell({
-                        r,
-                        c: houseColIdx,
-                    });
-                    const cell = ws[cellAddr];
-                    if (
-                        cell &&
-                        cell.v != null &&
-                        String(cell.v).trim() !== ""
-                    ) {
-                        setHouseAwb(String(cell.v).trim());
-                        break;
+                if (houseColIdx !== -1) {
+                    // walk downward from row 2 until we hit a non-empty value
+                    const range = XLSX.utils.decode_range(ws["!ref"]);
+                    for (let r = 1; r <= range.e.r; r++) {
+                        const cellAddr = XLSX.utils.encode_cell({
+                            r,
+                            c: houseColIdx,
+                        });
+                        const cell = ws[cellAddr];
+                        if (
+                            cell &&
+                            cell.v != null &&
+                            String(cell.v).trim() !== ""
+                        ) {
+                            setHouseAwb(String(cell.v).trim());
+                            break;
+                        }
                     }
+                } else {
+                    // couldn't find that column, leave houseAwb as "" and user will type
+                    setHouseAwb("");
                 }
             }
         } catch (err) {
             console.error("Failed to sniff House AWB:", err);
-            // leave houseAwb as ""
+            if (mode === MODES.SHEIN) {
+                setHouseAwb("");
+            }
         }
     };
 
@@ -263,10 +275,11 @@ export default function FixMids() {
                 text: "Please select a Branch and enter your name.",
             });
 
-        if (!houseAwb)
+        // only require houseAwb if mode === SHEIN
+        if (mode === MODES.SHEIN && !houseAwb)
             return setStatus({
                 type: "warning",
-                text: "House AWB (required) is empty. Please enter it.",
+                text: "House AWB (required for SHEIN) is empty. Please enter it.",
             });
 
         setBusy(true);
@@ -319,7 +332,8 @@ export default function FixMids() {
                 throw new Error(
                     "Need Airline 3 digit code and Master Bill Number columns."
                 );
-            if (idx.house === -1)
+            // only throw if SHEIN cares about a House AWB column
+            if (mode === MODES.SHEIN && idx.house === -1)
                 throw new Error(
                     'Could not find "House AWB" column in this file.'
                 );
@@ -395,23 +409,43 @@ export default function FixMids() {
                 }
             });
 
-            // FORCE every row's House AWB cell to match the confirmed houseAwb.
-            // If for some reason houseAwb is still blank (shouldn't happen because we require it),
-            // we fall back to Master Bill Number like before.
+            // HOUSE AWB HANDLING
             if (idx.house !== -1) {
                 const houseCol = idx.house;
-                rows.forEach((r, i) => {
-                    let valueToWrite = houseAwb;
-                    if (!valueToWrite && idx.bill !== -1) {
-                        // fallback: bill
-                        valueToWrite = (r[header[idx.bill]] ?? "")
-                            .toString()
-                            .trim();
+
+                if (mode === MODES.SHEIN) {
+                    // SHEIN: force every row's House AWB cell to match the confirmed houseAwb.
+                    rows.forEach((r, i) => {
+                        let valueToWrite = houseAwb;
+                        if (!valueToWrite && idx.bill !== -1) {
+                            // extremely defensive fallback
+                            valueToWrite = (r[header[idx.bill]] ?? "")
+                                .toString()
+                                .trim();
+                        }
+                        if (valueToWrite) {
+                            writeTextCell(ws, houseCol, i + 2, valueToWrite);
+                        }
+                    });
+                } else {
+                    // Boohoo modes: legacy behavior
+                    // fill blanks in House AWB with Master Bill Number
+                    if (idx.bill !== -1) {
+                        rows.forEach((r, i) => {
+                            const currentVal = (r[header[houseCol]] ?? "")
+                                .toString()
+                                .trim();
+                            if (!currentVal) {
+                                const bill = (r[header[idx.bill]] ?? "")
+                                    .toString()
+                                    .trim();
+                                if (bill) {
+                                    writeTextCell(ws, houseCol, i + 2, bill);
+                                }
+                            }
+                        });
                     }
-                    if (valueToWrite) {
-                        writeTextCell(ws, houseCol, i + 2, valueToWrite);
-                    }
-                });
+                }
             }
 
             // normalize FDAPRODUCTCODE
@@ -670,24 +704,26 @@ export default function FixMids() {
                                 />
                             </div>
 
-                            <div className="col-md-6">
-                                <label className="form-label">
-                                    House AWB (required)
-                                </label>
-                                <input
-                                    className="form-control"
-                                    placeholder="e.g. 36749974"
-                                    value={houseAwb}
-                                    onChange={(e) =>
-                                        setHouseAwb(e.target.value)
-                                    }
-                                    required
-                                />
-                                <div className="form-text">
-                                    We'll fill this automatically from the file
-                                    if possible. You can edit it.
+                            {mode === MODES.SHEIN && (
+                                <div className="col-md-6">
+                                    <label className="form-label">
+                                        House AWB (required)
+                                    </label>
+                                    <input
+                                        className="form-control"
+                                        placeholder="e.g. 36749974"
+                                        value={houseAwb}
+                                        onChange={(e) =>
+                                            setHouseAwb(e.target.value)
+                                        }
+                                        required={mode === MODES.SHEIN}
+                                    />
+                                    <div className="form-text">
+                                        We'll fill this automatically from the
+                                        file if possible. You can edit it.
+                                    </div>
                                 </div>
-                            </div>
+                            )}
                         </div>
 
                         <div className="d-flex gap-2 mt-3">
@@ -698,7 +734,7 @@ export default function FixMids() {
                                     busy ||
                                     !branch ||
                                     !person ||
-                                    !houseAwb
+                                    (mode === MODES.SHEIN && !houseAwb)
                                 }
                             >
                                 {busy ? "Processing…" : "Process & Download"}
