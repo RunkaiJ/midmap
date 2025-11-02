@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
+import codeCorrections from "../data/code_corrections.json";
 
 const MODES = {
     SHEIN: "shein",
@@ -154,8 +155,7 @@ export default function FixMids() {
     // - validate .xlsx
     // - load first sheet header/rows
     // - find "House AWB"/"HAWB"/"HouseAWB"
-    // - grab first non-empty cell under that column and set houseAwb
-    //   BUT ONLY if mode is SHEIN (other modes don't care / don't show it)
+    // - grab first non-empty cell under that column and set houseAwb (SHEIN only)
     const onFile = async (e) => {
         const f = e.target.files?.[0] || null;
         if (f && !isValidXlsx(f)) {
@@ -172,7 +172,6 @@ export default function FixMids() {
         setStatus(null);
         setChangesJson("");
 
-        // reset only if SHEIN, because boohoo doesn't use it
         if (mode === MODES.SHEIN) {
             setHouseAwb("");
         }
@@ -203,11 +202,9 @@ export default function FixMids() {
             };
 
             if (mode === MODES.SHEIN) {
-                // which column is House AWB?
                 const houseColIdx = findIdx(["House AWB", "HAWB", "HouseAWB"]);
 
                 if (houseColIdx !== -1) {
-                    // walk downward from row 2 until we hit a non-empty value
                     const range = XLSX.utils.decode_range(ws["!ref"]);
                     for (let r = 1; r <= range.e.r; r++) {
                         const cellAddr = XLSX.utils.encode_cell({
@@ -225,7 +222,6 @@ export default function FixMids() {
                         }
                     }
                 } else {
-                    // couldn't find that column, leave houseAwb as "" and user will type
                     setHouseAwb("");
                 }
             }
@@ -275,7 +271,6 @@ export default function FixMids() {
                 text: "Please select a Branch and enter your name.",
             });
 
-        // only require houseAwb if mode === SHEIN
         if (mode === MODES.SHEIN && !houseAwb)
             return setStatus({
                 type: "warning",
@@ -332,7 +327,6 @@ export default function FixMids() {
                 throw new Error(
                     "Need Airline 3 digit code and Master Bill Number columns."
                 );
-            // only throw if SHEIN cares about a House AWB column
             if (mode === MODES.SHEIN && idx.house === -1)
                 throw new Error(
                     'Could not find "House AWB" column in this file.'
@@ -418,7 +412,7 @@ export default function FixMids() {
                     rows.forEach((r, i) => {
                         let valueToWrite = houseAwb;
                         if (!valueToWrite && idx.bill !== -1) {
-                            // extremely defensive fallback
+                            // super defensive fallback
                             valueToWrite = (r[header[idx.bill]] ?? "")
                                 .toString()
                                 .trim();
@@ -428,8 +422,7 @@ export default function FixMids() {
                         }
                     });
                 } else {
-                    // Boohoo modes: legacy behavior
-                    // fill blanks in House AWB with Master Bill Number
+                    // Boohoo modes: fill blanks in House AWB with Master Bill Number
                     if (idx.bill !== -1) {
                         rows.forEach((r, i) => {
                             const currentVal = (r[header[houseCol]] ?? "")
@@ -448,18 +441,41 @@ export default function FixMids() {
                 }
             }
 
-            // normalize FDAPRODUCTCODE
+            // FDAPRODUCTCODE FIXUPS (step 1: codeCorrections map → direct swap)
+            if (idx.fda !== -1) {
+                const fdaKey = header[idx.fda];
+                rows.forEach((r, i) => {
+                    let raw = r[fdaKey];
+                    if (raw == null) return;
+
+                    // exact match lookup after trim
+                    const trimmed = String(raw).trim();
+                    const corrected = codeCorrections[trimmed];
+                    if (corrected) {
+                        // write corrected code into sheet + rows[]
+                        writeTextCell(ws, idx.fda, i + 2, corrected);
+                        r[fdaKey] = corrected;
+                    }
+                });
+            }
+
+            // FDAPRODUCTCODE NORMALIZATION (step 2: first token, strip whitespace)
             if (idx.fda !== -1) {
                 const fdaKey = header[idx.fda];
                 rows.forEach((r, i) => {
                     const raw = r[fdaKey];
                     if (raw == null) return;
+
+                    // split on commas, first non-empty
                     const firstToken =
                         String(raw)
                             .split(",")
                             .map((s) => s.trim())
                             .filter(Boolean)[0] || "";
+
+                    // remove any whitespace inside that token
                     const normalized = firstToken.replace(/\s+/g, "");
+
                     if (normalized !== String(raw)) {
                         writeTextCell(ws, idx.fda, i + 2, normalized);
                         r[fdaKey] = normalized;
