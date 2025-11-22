@@ -181,6 +181,7 @@ router.get("/table", async (req, res) => {
 const ExcelJS = require("exceljs");
 
 router.get("/table.xlsx", async (req, res) => {
+    res.set("Cache-Control", "no-store");
     const db = req.app.get("pg");
     const baseFilters = buildFilters(req.query);
 
