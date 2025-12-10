@@ -179,9 +179,11 @@ router.get("/table", async (req, res) => {
 
 // --- Excel export ------------------------------------------------------------
 const ExcelJS = require("exceljs");
+const Cursor = require("pg-cursor");
 
 router.get("/table.xlsx", async (req, res) => {
     res.set("Cache-Control", "no-store");
+
     const db = req.app.get("pg");
     const baseFilters = buildFilters(req.query);
 
@@ -237,7 +239,7 @@ router.get("/table.xlsx", async (req, res) => {
       LEFT JOIN midmap.canonical_manufacturers cm
         ON cm.id = ch.chosen_canon_id
     )
-  `;
+    `;
 
     const colFilter = buildColumnFilters(
         req.query,
@@ -254,18 +256,33 @@ router.get("/table.xlsx", async (req, res) => {
         address,
         city,
         zipcode,
-        ''::text AS note           
+        ''::text AS note
     FROM rows
     WHERE 1=1 ${colFilter.sql}
     ORDER BY mawb, wrong_mid;
     `;
 
-
     try {
-        const dataParams = [...baseFilters.params, ...colFilter.params];
-        const rows = await db.query(sql, dataParams).then((r) => r.rows);
+        const params = [...baseFilters.params, ...colFilter.params];
 
-        const wb = new ExcelJS.Workbook();
+        // ---------------------------
+        // STREAMING EXCEL WORKBOOK
+        // ---------------------------
+        res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="midmap_report_${Date.now()}.xlsx"`
+        );
+        res.setHeader(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+
+        const wb = new ExcelJS.stream.xlsx.WorkbookWriter({
+            stream: res,
+            useStyles: false,
+            useSharedStrings: false,
+        });
+
         const ws = wb.addWorksheet("Report");
 
         ws.columns = [
@@ -279,28 +296,47 @@ router.get("/table.xlsx", async (req, res) => {
             { header: "Notes", key: "note", width: 40 },
         ];
 
-        rows.forEach((r) => ws.addRow(r));
-        const header = ws.getRow(1);
-        header.font = { bold: true };
-        header.alignment = { vertical: "middle" };
-        ws.views = [{ state: "frozen", ySplit: 1 }];
+        // bold header row
+        const headerRow = ws.getRow(1);
+        headerRow.font = { bold: true };
+        headerRow.commit();
 
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="midmap_report_${Date.now()}.xlsx"`
-        );
-        res.setHeader(
-            "Content-Type",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        );
+        // ---------------------------
+        // STREAM ROWS FROM DB
+        // ---------------------------
+        const client = await db.connect();
+        const cursor = client.query(new Cursor(sql, params));
 
-        await wb.xlsx.write(res);
-        res.end();
+        const batchSize = 500;
+
+        const readNext = () =>
+            new Promise((resolve, reject) => {
+                cursor.read(batchSize, (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows);
+                });
+            });
+
+        let batch;
+        while ((batch = await readNext()) && batch.length > 0) {
+            for (const row of batch) {
+                ws.addRow(row).commit();
+            }
+        }
+
+        // cleanup
+        cursor.close(() => client.release());
+
+        ws.commit();
+        wb.commit(); // finalizes ZIP and ends response
     } catch (e) {
         console.error("GET /reports/table.xlsx error:", e);
-        res.status(500).send(e.message || "Failed to generate Excel");
+        if (!res.headersSent) {
+            res.status(500).send(e.message || "Failed to generate Excel");
+        }
     }
 });
+
 
 module.exports = router;
 
