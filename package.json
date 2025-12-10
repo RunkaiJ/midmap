@@ -1,5 +1,0 @@
-{
-  "dependencies": {
-    "pg-cursor": "^2.15.3"
-  }
-}
