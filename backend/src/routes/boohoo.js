@@ -12,13 +12,18 @@ const MODES = {
 };
 
 // load mapping (sync at boot; tiny file)
-const htsMapPath = path.resolve(__dirname, "../..", "data", "boohoo_hts_map.json");
+const htsMapPath = path.resolve(
+    __dirname,
+    "../..",
+    "data",
+    "boohoo_hts_map.json",
+);
 let HTS_MAP = {};
 try {
     HTS_MAP = JSON.parse(fs.readFileSync(htsMapPath, "utf8"));
 } catch (e) {
     console.warn(
-        "boohoo_hts_map.json not found or invalid, continuing with empty map"
+        "boohoo_hts_map.json not found or invalid, continuing with empty map",
     );
     HTS_MAP = {};
 }
@@ -44,6 +49,7 @@ function maybePatch(patches, rowIdx, col, next, current) {
 /** Apply Boohoo PURE rules to one row and push patches */
 function applyPure(row, patches) {
     const country = up(row["ManufacturerCountry"]);
+    const origin = up(row["Country of Origin"]);
     // Postal logic
     if (country === "GB") {
         maybePatch(
@@ -51,7 +57,7 @@ function applyPure(row, patches) {
             row._i,
             "ManufacturerPostalCode",
             "",
-            row["ManufacturerPostalCode"]
+            row["ManufacturerPostalCode"],
         );
     } else if (country === "HK") {
         maybePatch(
@@ -59,18 +65,17 @@ function applyPure(row, patches) {
             row._i,
             "ManufacturerPostalCode",
             "999077",
-            row["ManufacturerPostalCode"]
+            row["ManufacturerPostalCode"],
         );
     }
     // India HTS defaults
-    if (country === "IN") {
+    if (origin === "IN") {
         maybePatch(patches, row._i, "HTS-1", "99030226", row["HTS-1"]);
-        maybePatch(patches, row._i, "HTS-2", "99030184", row["HTS-2"]);
     }
 
     // HTS mapping replacements (if present)
     const htsCols = ["HTS-1", "HTS-2", "HTS-3", "HTS-4"].filter(
-        (c) => c in row
+        (c) => c in row,
     );
     for (const c of htsCols) {
         const cur = clean(row[c]);
@@ -89,7 +94,7 @@ function applyHybrid(row, patches, airline3d) {
             row._i,
             "Airline 3 digit code",
             airline3d,
-            row["Airline 3 digit code"]
+            row["Airline 3 digit code"],
         );
         // Replace "777" in GroupIdentifier with airline code
         const gi = (row["GroupIdentifier"] ?? "").toString();
@@ -109,7 +114,7 @@ function applyHybrid(row, patches, airline3d) {
                 row._i,
                 "Carrier Code",
                 carrier,
-                row["Carrier Code"]
+                row["Carrier Code"],
             );
         if (flight)
             maybePatch(
@@ -117,7 +122,7 @@ function applyHybrid(row, patches, airline3d) {
                 row._i,
                 "Voyage Flight No",
                 flight,
-                row["Voyage Flight No"]
+                row["Voyage Flight No"],
             );
     }
 }
@@ -128,13 +133,15 @@ function applyHybrid(row, patches, airline3d) {
  */
 router.get("/hts-map", (_req, res) => {
     // Explicitly disable caching
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate",
+    );
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
 
     res.json({ ok: true, map: HTS_MAP });
 });
-
 
 /**
  * POST /boohoo/transform
