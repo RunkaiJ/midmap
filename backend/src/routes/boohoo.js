@@ -49,7 +49,7 @@ function maybePatch(patches, rowIdx, col, next, current) {
 /** Apply Boohoo PURE rules to one row and push patches */
 function applyPure(row, patches) {
     const country = up(row["ManufacturerCountry"]);
-    const origin = up(row["Country of Origin"]);
+    const origin = row["Country Of Origin"];
     // Postal logic
     if (country === "GB") {
         maybePatch(
