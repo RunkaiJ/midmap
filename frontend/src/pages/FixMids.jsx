@@ -325,11 +325,11 @@ export default function FixMids() {
                 throw new Error("Could not find ManufacturerCode column.");
             if (idx.airline === -1 || idx.bill === -1)
                 throw new Error(
-                    "Need Airline 3 digit code and Master Bill Number columns."
+                    "Need Airline 3 digit code and Master Bill Number columns.",
                 );
             if (mode === MODES.SHEIN && idx.house === -1)
                 throw new Error(
-                    'Could not find "House AWB" column in this file.'
+                    'Could not find "House AWB" column in this file.',
                 );
 
             // build unique (bad_mid, manufacturer_name)
@@ -348,13 +348,13 @@ export default function FixMids() {
             }
 
             const resolved = await resolvePairs(
-                Array.from(uniquePairs.values())
+                Array.from(uniquePairs.values()),
             );
             const resMap = new Map(
                 resolved.map((x) => [
                     uniqKey(x.bad_mid, x.manufacturer_name),
                     x,
-                ])
+                ]),
             );
 
             // apply replacements / collect audit rows
@@ -500,11 +500,20 @@ export default function FixMids() {
 
                 // apply backend patches
                 for (const p of patches) {
+                    console.log(
+                        "Applying patch:",
+                        p.col,
+                        "at row",
+                        p.row,
+                        "value:",
+                        p.value,
+                    );
                     const colIdx = header.findIndex(
                         (h) =>
                             h.trim().toLowerCase() ===
-                            String(p.col).trim().toLowerCase()
+                            String(p.col).trim().toLowerCase(),
                     );
+                    console.log("Found column index:", colIdx);
                     if (colIdx !== -1) {
                         const val = p.value == null ? "" : String(p.value);
                         writeTextCell(ws, colIdx, p.row + 2, val);
@@ -527,7 +536,7 @@ export default function FixMids() {
                             Object.entries(rawMap).map(([k, v]) => [
                                 norm(k),
                                 String(v),
-                            ])
+                            ]),
                         );
                         const htsKey = header[idx.hts];
                         rows.forEach((r, i) => {
@@ -565,8 +574,8 @@ export default function FixMids() {
                     .map(
                         (c) =>
                             `${csvEsc(c.bad_mid)},${csvEsc(
-                                c.good_mid
-                            )},${csvEsc(c.manufacturer_name)},${c.count}`
+                                c.good_mid,
+                            )},${csvEsc(c.manufacturer_name)},${c.count}`,
                     )
                     .join("\n");
 
@@ -576,7 +585,7 @@ export default function FixMids() {
                 idx.entryDate,
                 idx.importDate,
                 idx.exportDate,
-                idx.arrivalDate
+                idx.arrivalDate,
             );
             trimTrailingEmpty(ws);
 
