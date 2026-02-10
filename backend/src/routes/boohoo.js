@@ -70,6 +70,7 @@ function applyPure(row, patches) {
     }
     // India HTS defaults
     if (origin === "IN") {
+        console.log("HIT INDIA RULE", row._i);
         maybePatch(patches, row._i, "HTS-1", "99030226", row["HTS-1"]);
     }
 
