@@ -70,7 +70,13 @@ function applyPure(row, patches) {
     }
     // India HTS defaults
     if (origin === "IN") {
-        maybePatch(patches, row._i, "HTS-1", "99030226", row["HTS-1"]);
+        if (!clean(row["HTS-1"])) {
+            patches.push({
+                row: row._i,
+                col: "HTS-1",
+                value: "99030226",
+            });
+        }
     }
 
     // HTS mapping replacements (if present)
