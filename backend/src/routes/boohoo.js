@@ -69,17 +69,17 @@ function applyPure(row, patches) {
         );
     }
     // India HTS defaults
-    if (origin === "IN") {
-        console.log(
-            "HIT INDIA RULE",
-            row._i,
-            "HTS-1 exists?",
-            "HTS-1" in row,
-            "Current value:",
-            row["HTS-1"],
-        );
-        maybePatch(patches, row._i, "HTS-1", "99030226", row["HTS-1"]);
-    }
+    // if (origin === "IN") {
+    //     console.log(
+    //         "HIT INDIA RULE",
+    //         row._i,
+    //         "HTS-1 exists?",
+    //         "HTS-1" in row,
+    //         "Current value:",
+    //         row["HTS-1"],
+    //     );
+    //     maybePatch(patches, row._i, "HTS-1", "99030226", row["HTS-1"]);
+    // }
 
     // HTS mapping replacements (if present)
     const htsCols = ["HTS-1", "HTS-2", "HTS-3", "HTS-4"].filter(
