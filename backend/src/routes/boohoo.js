@@ -104,10 +104,10 @@ function applyHybrid(row, patches, airline3d) {
             airline3d,
             row["Airline 3 digit code"],
         );
-        // Replace "777" in GroupIdentifier with airline code
+        // Replace only the leading "777" in GroupIdentifier with airline code
         const gi = (row["GroupIdentifier"] ?? "").toString();
-        if (gi.includes("777")) {
-            const next = gi.replace(/777/g, airline3d);
+        if (gi.startsWith("777")) {
+            const next = airline3d + gi.slice(3);
             maybePatch(patches, row._i, "GroupIdentifier", next, gi);
         }
     }
