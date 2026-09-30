@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 import codeCorrections from "../data/code_corrections.json";
+import { readWorksheet, writeRowText, midPairKey, cleanDescriptionColumns } from "../lib/worksheet.js";
 
 const MODES = {
     SHEIN: "shein",
@@ -11,12 +12,6 @@ const MODES = {
 };
 
 const API = import.meta.env.VITE_API_BASE;
-
-// helper to write text cells back into worksheet
-const writeTextCell = (ws, colIndex, row1Based, text) => {
-    const addr = XLSX.utils.encode_cell({ c: colIndex, r: row1Based - 1 });
-    ws[addr] = { t: "s", v: text };
-};
 
 function trimTrailingEmpty(ws) {
     const ref = ws["!ref"] || "A1";
@@ -69,8 +64,8 @@ function trimTrailingEmpty(ws) {
 // format numeric Excel date serials to m/d/yyyy in specified columns
 function fmtDateCols(ws, ...colIdx) {
     const rng = XLSX.utils.decode_range(ws["!ref"]);
-    for (const c of colIdx) {
-        for (let r = 1; r <= rng.e.r; r++) {
+    for (const c of colIdx.filter((c) => c >= 0)) {
+        for (let r = rng.s.r + 1; r <= rng.e.r; r++) {
             const addr = XLSX.utils.encode_cell({ r, c });
             const cell = ws[addr];
             if (cell && typeof cell.v === "number") {
@@ -108,30 +103,6 @@ export default function FixMids() {
     // Boohoo bits
     const [mode, setMode] = useState(MODES.SHEIN);
     const [airlineInput, setAirlineInput] = useState(""); // hybrid only
-    const [htsMap, setHtsMap] = useState({}); // future use
-
-    // grab HTS map for boohoo if needed
-    useEffect(() => {
-        let cancelled = false;
-        if (mode === MODES.BOOHOO_PURE || mode === MODES.BOOHOO_HYBRID) {
-            (async () => {
-                try {
-                    const r = await fetch(`${API}/boohoo/hts-map`, {
-                        cache: "no-store",
-                    });
-                    if (!r.ok) return;
-                    const j = await r.json();
-                    if (!cancelled && j && typeof j === "object") setHtsMap(j);
-                } catch (_) {}
-            })();
-        } else {
-            setHtsMap({});
-        }
-        return () => {
-            cancelled = true;
-        };
-    }, [mode]);
-
     // load branches for select
     useEffect(() => {
         let cancelled = false;
@@ -184,12 +155,7 @@ export default function FixMids() {
             const wsName = wb.SheetNames[0];
             const ws = wb.Sheets[wsName];
 
-            // parse headers
-            const headerRow =
-                XLSX.utils
-                    .sheet_to_json(ws, { header: 1 })
-                    .at(0)
-                    ?.map((h) => (h ?? "").toString().trim()) || [];
+            const { header: headerRow, rows: inputRows } = readWorksheet(ws);
 
             // helper: find index of a header by label(s)
             const findIdx = (labels) => {
@@ -205,22 +171,9 @@ export default function FixMids() {
                 const houseColIdx = findIdx(["House AWB", "HAWB", "HouseAWB"]);
 
                 if (houseColIdx !== -1) {
-                    const range = XLSX.utils.decode_range(ws["!ref"]);
-                    for (let r = 1; r <= range.e.r; r++) {
-                        const cellAddr = XLSX.utils.encode_cell({
-                            r,
-                            c: houseColIdx,
-                        });
-                        const cell = ws[cellAddr];
-                        if (
-                            cell &&
-                            cell.v != null &&
-                            String(cell.v).trim() !== ""
-                        ) {
-                            setHouseAwb(String(cell.v).trim());
-                            break;
-                        }
-                    }
+                    const first = inputRows.find((row) =>
+                        String(row[headerRow[houseColIdx]] ?? "").trim() !== "");
+                    if (first) setHouseAwb(String(first[headerRow[houseColIdx]]).trim());
                 } else {
                     setHouseAwb("");
                 }
@@ -246,7 +199,7 @@ export default function FixMids() {
 
     async function logChanges(rows) {
         if (!rows.length) return;
-        await fetch(`${API}/log/changes`, {
+        const response = await fetch(`${API}/log/changes`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -254,7 +207,8 @@ export default function FixMids() {
                 branch,
                 person,
             }),
-        }).catch(() => {}); // non-blocking
+        });
+        if (!response.ok) throw new Error("Audit log could not be saved. Please retry processing the file.");
     }
 
     const processAndDownload = async (e) => {
@@ -288,13 +242,9 @@ export default function FixMids() {
             const wsName = wb.SheetNames[0];
             const ws = wb.Sheets[wsName];
 
-            // headers + rows
-            const header =
-                XLSX.utils
-                    .sheet_to_json(ws, { header: 1 })
-                    .at(0)
-                    ?.map((h) => (h ?? "").toString().trim()) || [];
-            const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+            const { header, rows } = readWorksheet(ws);
+            if (!rows.length) throw new Error("The first worksheet has no data rows.");
+            cleanDescriptionColumns(ws, header, rows);
 
             const findIdx = (labels) => {
                 const lower = header.map((h) => h.toLowerCase());
@@ -333,8 +283,7 @@ export default function FixMids() {
                 );
 
             // build unique (bad_mid, manufacturer_name)
-            const uniqKey = (b, n) =>
-                `${(b || "").trim()}||${(n || "").trim()}`;
+            const uniqKey = midPairKey;
             const uniquePairs = new Map();
             for (const r of rows) {
                 const bad_mid = (r[header[idx.mid]] ?? "").toString().trim();
@@ -358,11 +307,10 @@ export default function FixMids() {
             );
 
             // apply replacements / collect audit rows
-            const colLetter = XLSX.utils.encode_col(idx.mid);
             const counts = new Map();
             const changeRows = [];
 
-            rows.forEach((r, i) => {
+            rows.forEach((r) => {
                 const bad_mid = (r[header[idx.mid]] ?? "").toString().trim();
                 const manufacturer_name =
                     idx.name === -1
@@ -371,9 +319,7 @@ export default function FixMids() {
                 const hit = resMap.get(uniqKey(bad_mid, manufacturer_name));
 
                 if (hit && hit.good_mid && hit.good_mid !== bad_mid) {
-                    const excelRow = i + 2; // header row is 1
-                    const addr = `${colLetter}${excelRow}`;
-                    ws[addr] = { t: "s", v: hit.good_mid };
+                    writeRowText(ws, idx.mid, r, hit.good_mid);
 
                     const k = `${hit.bad_mid}-->${hit.good_mid}||${manufacturer_name}`;
                     counts.set(k, (counts.get(k) || 0) + 1);
@@ -409,7 +355,7 @@ export default function FixMids() {
 
                 if (mode === MODES.SHEIN) {
                     // SHEIN: force every row's House AWB cell to match the confirmed houseAwb.
-                    rows.forEach((r, i) => {
+                    rows.forEach((r) => {
                         let valueToWrite = houseAwb;
                         if (!valueToWrite && idx.bill !== -1) {
                             // super defensive fallback
@@ -418,13 +364,13 @@ export default function FixMids() {
                                 .trim();
                         }
                         if (valueToWrite) {
-                            writeTextCell(ws, houseCol, i + 2, valueToWrite);
+                            writeRowText(ws, houseCol, r, valueToWrite);
                         }
                     });
                 } else {
                     // Boohoo modes: fill blanks in House AWB with Master Bill Number
                     if (idx.bill !== -1) {
-                        rows.forEach((r, i) => {
+                        rows.forEach((r) => {
                             const currentVal = (r[header[houseCol]] ?? "")
                                 .toString()
                                 .trim();
@@ -433,7 +379,7 @@ export default function FixMids() {
                                     .toString()
                                     .trim();
                                 if (bill) {
-                                    writeTextCell(ws, houseCol, i + 2, bill);
+                                    writeRowText(ws, houseCol, r, bill);
                                 }
                             }
                         });
@@ -444,7 +390,7 @@ export default function FixMids() {
             // FDAPRODUCTCODE FIXUPS (step 1: codeCorrections map → direct swap)
             if (idx.fda !== -1) {
                 const fdaKey = header[idx.fda];
-                rows.forEach((r, i) => {
+                rows.forEach((r) => {
                     let raw = r[fdaKey];
                     if (raw == null) return;
 
@@ -453,7 +399,7 @@ export default function FixMids() {
                     const corrected = codeCorrections[trimmed];
                     if (corrected) {
                         // write corrected code into sheet + rows[]
-                        writeTextCell(ws, idx.fda, i + 2, corrected);
+                        writeRowText(ws, idx.fda, r, corrected);
                         r[fdaKey] = corrected;
                     }
                 });
@@ -462,7 +408,7 @@ export default function FixMids() {
             // FDAPRODUCTCODE NORMALIZATION (step 2: first token, strip whitespace)
             if (idx.fda !== -1) {
                 const fdaKey = header[idx.fda];
-                rows.forEach((r, i) => {
+                rows.forEach((r) => {
                     const raw = r[fdaKey];
                     if (raw == null) return;
 
@@ -477,7 +423,7 @@ export default function FixMids() {
                     const normalized = firstToken.replace(/\s+/g, "");
 
                     if (normalized !== String(raw)) {
-                        writeTextCell(ws, idx.fda, i + 2, normalized);
+                        writeRowText(ws, idx.fda, r, normalized);
                         r[fdaKey] = normalized;
                     }
                 });
@@ -516,7 +462,7 @@ export default function FixMids() {
                     console.log("Found column index:", colIdx);
                     if (colIdx !== -1) {
                         const val = p.value == null ? "" : String(p.value);
-                        writeTextCell(ws, colIdx, p.row + 2, val);
+                        writeRowText(ws, colIdx, rows[p.row], val);
                         rows[p.row][header[colIdx]] = val;
                     }
                 }
@@ -539,14 +485,14 @@ export default function FixMids() {
                             ]),
                         );
                         const htsKey = header[idx.hts];
-                        rows.forEach((r, i) => {
+                        rows.forEach((r) => {
                             const raw = r[htsKey];
                             const fixed =
                                 raw == null
                                     ? undefined
                                     : normMap.get(norm(raw));
                             if (fixed && fixed !== raw) {
-                                writeTextCell(ws, idx.hts, i + 2, fixed);
+                                writeRowText(ws, idx.hts, r, fixed);
                                 r[htsKey] = fixed;
                             }
                         });

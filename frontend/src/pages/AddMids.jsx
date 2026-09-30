@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useState } from "react";
 const RAW_API = (import.meta.env.VITE_API_BASE || "").trim();
 const API = RAW_API.replace(/\/+$/, "");
 if (!/^https?:\/\//.test(API)) {
-    // eslint-disable-next-line no-console
     console.warn(
         "VITE_API_BASE should be an absolute URL (http/https). Got:",
         RAW_API
@@ -267,9 +266,19 @@ export default function AddMids() {
                 body: JSON.stringify(payload),
             });
 
-            const data = await res.json().catch(() => ({}));
+            const text = await res.text();
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch {
+                throw new Error("The server returned an invalid response. Please retry.");
+            }
             if (!res.ok || data?.ok === false) {
-                throw new Error(data?.error || (await res.text()));
+                const conflict = data?.conflicts?.[0];
+                const detail = conflict
+                    ? ` Existing MID: ${conflict.existing_good_mid}; submitted MID: ${conflict.requested_good_mid}. No mappings from this batch were saved.`
+                    : "";
+                throw new Error((data?.error || "Failed to save mappings") + detail);
             }
 
             const inserted = Number(data?.inserted ?? 0);

@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const withTransaction = require("../transaction");
 
 const clean = (s) => (s ?? "").toString().trim();
 const up = (s) => clean(s).toUpperCase();
@@ -149,12 +150,11 @@ router.post("/mids", async (req, res) => {
 
     if (autofill && pairs.length) {
         try {
-            await db.query("BEGIN");
-            await autofillCanonFromAlias(db, pairs, changedBy, actorBranch);
-            await db.query("COMMIT");
+            await withTransaction(db, (client) =>
+                autofillCanonFromAlias(client, pairs, changedBy, actorBranch));
         } catch (e) {
-            await db.query("ROLLBACK");
-            console.error("autofill failed:", e); 
+            console.error("autofill failed:", e);
+            return res.status(500).json({ ok: false, error: "Failed to save automatic name mappings" });
         }
     }
 

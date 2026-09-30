@@ -127,9 +127,9 @@ router.get("/table", async (req, res) => {
         ch.bad_mid                      AS wrong_mid,
         cm.good_mid                     AS correct_mid,
         cm.manufacturer_name            AS name,
-        COALESCE(cm.address, '')        AS address,
-        COALESCE(cm.city, '')           AS city,
-        COALESCE(cm.zipcode, '')        AS zipcode
+        COALESCE(to_jsonb(cm)->>'address', '') AS address,
+        COALESCE(to_jsonb(cm)->>'city', '')    AS city,
+        COALESCE(to_jsonb(cm)->>'zipcode', '') AS zipcode
       FROM chosen ch
       LEFT JOIN midmap.canonical_manufacturers cm
         ON cm.id = ch.chosen_canon_id
@@ -232,9 +232,9 @@ router.get("/table.xlsx", async (req, res) => {
         ch.bad_mid                      AS wrong_mid,
         cm.good_mid                     AS correct_mid,
         cm.manufacturer_name            AS name,
-        COALESCE(cm.address, '')        AS address,
-        COALESCE(cm.city, '')           AS city,
-        COALESCE(cm.zipcode, '')        AS zipcode
+        COALESCE(to_jsonb(cm)->>'address', '') AS address,
+        COALESCE(to_jsonb(cm)->>'city', '')    AS city,
+        COALESCE(to_jsonb(cm)->>'zipcode', '') AS zipcode
       FROM chosen ch
       LEFT JOIN midmap.canonical_manufacturers cm
         ON cm.id = ch.chosen_canon_id
@@ -262,6 +262,20 @@ router.get("/table.xlsx", async (req, res) => {
     ORDER BY mawb, wrong_mid;
     `;
 
+    let client;
+    let cursor;
+    let releaseError;
+    let closing;
+    const closeCursor = () => {
+        if (!cursor) return Promise.resolve();
+        if (!closing) closing = new Promise((resolve, reject) =>
+            cursor.close((error) => error ? reject(error) : resolve()));
+        return closing;
+    };
+    const onClose = () => {
+        if (!res.writableFinished) closeCursor().catch((error) => { releaseError = error; });
+    };
+    res.once("close", onClose);
     try {
         const params = [...baseFilters.params, ...colFilter.params];
 
@@ -304,8 +318,9 @@ router.get("/table.xlsx", async (req, res) => {
         // ---------------------------
         // STREAM ROWS FROM DB
         // ---------------------------
-        const client = await db.connect();
-        const cursor = client.query(new Cursor(sql, params));
+        client = await db.connect();
+        if (res.destroyed) return;
+        cursor = client.query(new Cursor(sql, params));
 
         const batchSize = 500;
 
@@ -318,22 +333,34 @@ router.get("/table.xlsx", async (req, res) => {
             });
 
         let batch;
-        while ((batch = await readNext()) && batch.length > 0) {
+        while (!res.destroyed && (batch = await readNext()) && batch.length > 0) {
             for (const row of batch) {
                 ws.addRow(row).commit();
             }
         }
 
-        // cleanup
-        cursor.close(() => client.release());
-
-        ws.commit();
-        wb.commit(); // finalizes ZIP and ends response
+        if (!res.destroyed) {
+            ws.commit();
+            await wb.commit();
+        }
     } catch (e) {
         console.error("GET /reports/table.xlsx error:", e);
         if (!res.headersSent) {
-            res.status(500).send(e.message || "Failed to generate Excel");
+            res.removeHeader("Content-Disposition");
+            res.status(500).type("text/plain").send("Failed to generate Excel");
+        } else {
+            res.destroy(e);
         }
+    } finally {
+        res.off("close", onClose);
+        if (cursor) {
+            try {
+                await closeCursor();
+            } catch (error) {
+                releaseError = error;
+            }
+        }
+        if (client) client.release(releaseError);
     }
 });
 
